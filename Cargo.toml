@@ -1,0 +1,10 @@
+[workspace]
+resolver = "2"
+members = [
+    "marie-core", 
+    "marie-test", 
+    "marie", 
+    "marie-leptos", 
+    "marie-axum", 
+    "marie-web-example"
+]

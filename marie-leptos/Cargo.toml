@@ -1,0 +1,18 @@
+[package]
+name = "marie-leptos"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Pas de feature de rendu fixée ici : ce crate est un simple ensemble de
+# composants, consommé aussi bien par un frontend csr/hydrate que par le
+# binaire ssr qui le fait tourner — la feature réellement active (csr,
+# hydrate ou ssr) vient de l'unification Cargo avec ce que le consommateur
+# demande sur `leptos` lui-même.
+leptos = { version = "0.8" }
+# Rendu Canvas de l'éditeur de graphe d'états (voir state_graph_editor.rs) —
+# leptos ne fournit pas d'abstraction Canvas 2D, on parle directement à
+# l'API DOM sous-jacente.
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["CanvasRenderingContext2d", "HtmlCanvasElement", "MouseEvent", "HtmlInputElement", "FileList", "File"] }

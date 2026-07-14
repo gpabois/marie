@@ -1,0 +1,114 @@
+[package]
+name = "marie-web-example"
+version = "0.1.0"
+edition = "2024"
+
+# `cdylib` pour le bundle wasm hydraté par le navigateur (feature "hydrate"),
+# `rlib` pour le binaire serveur natif (feature "ssr", `src/main.rs`) qui
+# rend l'app côté serveur via `leptos_axum` puis l'hydrate côté client — les
+# deux ciblent le même `lib.rs`, dont le contenu se restreint lui-même via
+# `#[cfg(feature = ...)]` (voir sa doc).
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[[bin]]
+name = "marie-web"
+path = "src/main.rs"
+required-features = ["ssr"]
+
+[dependencies]
+# --- Toujours présent : DTOs de dto.rs, seul module partagé sans distinction
+# de feature entre le frontend (wasm32, feature "hydrate") et le serveur
+# (natif, feature "ssr") ---
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+
+# `marie_leptos::HitlForm`/composants de `components/` référencent
+# `web_sys::File` dans leur signature (voir `chat_view::on_hitl_file_selected`)
+# — puisque ces composants sont désormais partagés (ssr *et* hydrate, voir
+# `crate::lib`), ces crates ne peuvent pas rester cantonnées à la feature
+# "hydrate" comme dans l'ancien crate CSR-only : elles doivent compiler (pas
+# forcément fonctionner, ce code ne s'exécute jamais côté serveur — voir la
+# doc de `components::chat_view`) sur les deux cibles, comme le fait déjà
+# `marie-leptos` lui-même.
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+web-sys = { version = "0.3", features = ["Window", "Location", "File"] }
+gloo-file = { version = "0.3", features = ["futures"] }
+
+# --- Frontend (feature "hydrate", wasm32-unknown-unknown) ---
+# Pas de `features = [...]` ici : une feature listée directement sur une
+# dépendance s'active dès que celle-ci est incluse, quelle que soit la
+# feature de `marie-web` qui l'a déclenchée (voir plus bas, `ssr` active
+# aussi `dep:leptos`) — un `features = ["hydrate"]` ici ferait fuiter
+# `leptos/hydrate` (donc `reactive_graph/effects`) jusque dans le binaire
+# `ssr`, où `Effect::new` se mettrait alors réellement à spawn via
+# `Executor::spawn_local` (`leptos::task::spawn_local` côté SSR n'est censé
+# être un no-op — voir `components::chat_view` — que si `effects` reste
+# désactivée) hors de tout `task::LocalSet`, provoquant un panic au
+# démarrage. `leptos/hydrate` est déjà listée explicitement dans la feature
+# `hydrate` ci-dessous, ce qui suffit à la scoper correctement.
+leptos = { version = "0.8", optional = true }
+marie-leptos = { path = "../marie-leptos", optional = true }
+wasm-bindgen-futures = { version = "0.4", optional = true }
+console_error_panic_hook = { version = "0.1", optional = true }
+gloo-net = { version = "0.6", features = ["websocket"], optional = true }
+futures = { version = "0.3", optional = true }
+
+# --- Serveur (feature "ssr", natif) ---
+leptos_axum = { version = "0.8", optional = true }
+marie-core = { path = "../marie-core", optional = true }
+marie-axum = { path = "../marie-axum", optional = true }
+axum = { version = "0.8", features = ["ws"], optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"], optional = true }
+tower-http = { version = "0.6", features = ["fs", "trace"], optional = true }
+sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres"], optional = true }
+object_store = { version = "0.14.0", optional = true }
+anyhow = { version = "1.0.102", optional = true }
+tracing = { version = "0.1", optional = true }
+tracing-subscriber = { version = "0.3", features = ["env-filter"], optional = true }
+clap = { version = "4", features = ["derive"], optional = true }
+hex = { version = "0.4", optional = true }
+dotenvy = "0.15.7"
+
+[features]
+default = ["hydrate"]
+hydrate = [
+    "dep:leptos",
+    "leptos/hydrate",
+    "dep:marie-leptos",
+    "dep:wasm-bindgen-futures",
+    "dep:console_error_panic_hook",
+    "dep:gloo-net",
+    "dep:futures",
+]
+ssr = [
+    "dep:leptos",
+    "leptos/ssr",
+    "dep:leptos_axum",
+    "dep:marie-leptos",
+    "dep:marie-core",
+    "dep:marie-axum",
+    "dep:axum",
+    "dep:tokio",
+    "dep:tower-http",
+    "dep:sqlx",
+    "dep:object_store",
+    "dep:anyhow",
+    "dep:tracing",
+    "dep:tracing-subscriber",
+    "dep:clap",
+    "dep:hex",
+]
+
+[package.metadata.leptos]
+output-name = "marie-web-example"
+# Résolu relativement au dossier de ce crate (contrairement à `site-root`,
+# résolu relativement à la racine du workspace — deux conventions
+# différentes dans cargo-leptos lui-même, déjà rencontré lors du prototype
+# précédent sur `marie-axum-leptos`).
+assets-dir = "assets"
+bin-features = ["ssr"]
+bin-default-features = false
+lib-features = ["hydrate"]
+lib-default-features = false

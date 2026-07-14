@@ -1,0 +1,258 @@
+:root {
+  color-scheme: light dark;
+  --border: #d0d5dd;
+  --bg-panel: #ffffff;
+  --bg-app: #f4f6f8;
+  --accent: #0284c7;
+  --text-muted: #64748b;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --border: #334155;
+    --bg-panel: #1e293b;
+    --bg-app: #0f172a;
+    --text-muted: #94a3b8;
+  }
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, sans-serif;
+  background: var(--bg-app);
+  color: inherit;
+}
+
+.app {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 1rem;
+}
+
+.tabs {
+  display: flex;
+  gap: 0.5rem;
+  margin-bottom: 1rem;
+}
+
+.tabs button {
+  padding: 0.5rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-panel);
+  cursor: pointer;
+}
+
+.tabs button.active {
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.panel {
+  background: var(--bg-panel);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem;
+  margin-bottom: 1rem;
+}
+
+.panel h2 {
+  margin-top: 0;
+}
+
+.row,
+.form-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.form-grid input,
+.form-grid select,
+.form-grid textarea,
+.row input {
+  flex: 1 1 160px;
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.status {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  min-height: 1.2em;
+}
+
+.hint {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  cursor: pointer;
+  text-decoration: underline;
+  padding: 0 0.4rem;
+}
+
+.frame {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+
+.frame-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.badge {
+  background: var(--accent);
+  color: white;
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  font-size: 0.75rem;
+}
+
+.context-entry {
+  margin: 0.2rem 0;
+  font-size: 0.9rem;
+}
+
+.stdio {
+  white-space: pre-wrap;
+  font-size: 0.8rem;
+  max-height: 8rem;
+  overflow-y: auto;
+  background: var(--bg-app);
+  padding: 0.4rem;
+  border-radius: 4px;
+}
+
+.log-entry {
+  font-size: 0.9rem;
+  margin: 0.2rem 0;
+}
+
+.var-list,
+.file-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 0.5rem;
+}
+
+.var-list li,
+.file-list li {
+  padding: 0.2rem 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.executable-editor {
+  display: inline-flex;
+  gap: 0.3rem;
+  margin-left: 0.5rem;
+}
+
+.executable-editor select,
+.executable-editor input {
+  padding: 0.2rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.file-editor textarea {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+canvas {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-app);
+  max-width: 100%;
+}
+
+.state-graph-editor-placeholder {
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  background: var(--bg-app);
+  color: var(--text-muted);
+  padding: 1rem;
+  text-align: center;
+}
+
+.hitl-panel {
+  border-color: var(--accent);
+}
+
+.hitl-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.hitl-question {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+
+.hitl-question-label {
+  font-weight: 600;
+}
+
+.hitl-form input[type="text"],
+.hitl-form textarea,
+.hitl-form select {
+  padding: 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: transparent;
+  color: inherit;
+}
+
+.hitl-radio-group,
+.hitl-checkbox-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}
+
+.hitl-radio,
+.hitl-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: normal;
+}
+
+.hitl-file {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.hitl-file-name {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.hitl-form button[type="submit"] {
+  align-self: flex-start;
+  padding: 0.5rem 1.2rem;
+  border: none;
+  border-radius: 6px;
+  background: var(--accent);
+  color: white;
+  cursor: pointer;
+}
