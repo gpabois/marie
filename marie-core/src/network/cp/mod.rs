@@ -39,7 +39,7 @@ use crate::{
         declaration::EncryptedModel,
     },
     network::{
-        actor::{NetworkActor, NetworkClient},
+        actor::{NetworkActor, NetworkService},
         cp::{
             log_store::{LogStore, RaftLogBackend},
             network::NetworkFactory,
@@ -197,7 +197,7 @@ impl DynamicRpcRegistry {
 /// requêtes en vol sont abandonnées (leur future est simplement annulée par
 /// `select_ok` en étant droppée).
 async fn forward_race(
-    client: &NetworkClient,
+    client: &NetworkService,
     executors: &HashSet<PeerId>,
     call: RpcCall,
 ) -> Result<serde_json::Value, anyhow::Error> {
@@ -399,7 +399,7 @@ pub async fn start_control_plane(
     expert_store: Arc<dyn ExpertStore>,
     state_graph_store: Arc<dyn StateGraphStore>,
     mut shutdown: watch::Receiver<bool>,
-    ready: oneshot::Sender<NetworkClient>,
+    ready: oneshot::Sender<NetworkService>,
 ) -> Result<(), anyhow::Error> {
     use NodeKind::ControlPlane;
 
@@ -636,7 +636,7 @@ pub async fn start_control_plane(
 /// [`YieldWatch`] sur un nœud qui n'agira jamais dessus.
 async fn reconcile(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     state_machine: &ControlPlaneStateMachineStore,
     health: &mut HashMap<PeerId, NodeHealth>,
     assignments: &mut HashMap<JobId, PeerId>,
@@ -780,7 +780,7 @@ fn agent_has_active_job(state: &ControlPlaneState, agent_id: GlobalAgentId) -> b
 /// automatique pour cette raison précise.
 async fn watch_stuck_yields(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     state: &ControlPlaneState,
     watch: &mut HashMap<GlobalAgentId, YieldWatch>,
 ) {
@@ -953,7 +953,7 @@ async fn propose_best_effort(raft: &Raft<TypeConfig>, request: ControlPlaneReque
 /// lui-même vient de le devenir).
 async fn propose_or_forward(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     call: RpcCall,
     request: ControlPlaneRequest,
 ) -> Result<serde_json::Value, anyhow::Error> {
@@ -1000,7 +1000,7 @@ async fn propose_or_forward(
 /// élu leader — voir la boucle événementielle dans [`start_control_plane`]).
 /// S'il n'est pas leader lui-même, la resoumission doit donc être relayée,
 /// pas silencieusement abandonnée.
-async fn submit_resume_job(raft: &Raft<TypeConfig>, client: &NetworkClient, agent_id: GlobalAgentId) {
+async fn submit_resume_job(raft: &Raft<TypeConfig>, client: &NetworkService, agent_id: GlobalAgentId) {
     let job = Job { id: crate::id::generate_id(), kind: JobKind::RunAgent(agent_id) };
     let call = RpcCall::new(RpcCall::SUBMIT_JOB, job.clone());
     if let Err(error) = propose_or_forward(raft, client, call, ControlPlaneRequest::SubmitJob(job)).await {
@@ -1017,7 +1017,7 @@ async fn submit_resume_job(raft: &Raft<TypeConfig>, client: &NetworkClient, agen
 /// sans registre séparé.
 async fn resume_after_hitl_answer(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     state_machine: &ControlPlaneStateMachineStore,
     answer: HumanInputAnswer,
 ) {
@@ -1060,7 +1060,7 @@ fn is_agent_completed(state: &ControlPlaneState, agent_id: GlobalAgentId) -> boo
 /// enfants sont désormais `Completed` — pas seulement celui-ci.
 async fn resume_orchestration_parents(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     state: &ControlPlaneState,
     completed_agent_id: GlobalAgentId,
 ) {
@@ -1100,7 +1100,7 @@ async fn resume_orchestration_parents(
 /// moment où ce job se termine.
 async fn on_job_terminated(
     raft: &Raft<TypeConfig>,
-    client: &NetworkClient,
+    client: &NetworkService,
     state_machine: &ControlPlaneStateMachineStore,
     job_id: JobId,
     new_state: &JobState,
@@ -1126,7 +1126,7 @@ async fn on_job_terminated(
 async fn execute_rpc(
     call: RpcCall,
     state_machine: &ControlPlaneStateMachineStore,
-    client: &NetworkClient,
+    client: &NetworkService,
     raft: &Raft<TypeConfig>,
     secret: &SecretManager,
     local_peer_id: PeerId,

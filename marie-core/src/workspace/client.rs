@@ -13,7 +13,7 @@ use yrs::{StateVector, updates::{decoder::Decode, encoder::Encode}};
 
 use crate::{
     agent::context::ContextEntry,
-    network::{actor::{NetworkClient, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SetSessionWorkspaceRequest, WorkspaceFetchRequest}},
+    network::{actor::{NetworkService, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SetSessionWorkspaceRequest, WorkspaceFetchRequest}},
     session::SessionId,
     workspace::{WorkspaceApi, WorkspaceId, crdt::YrsWorkspace, sync::{WORKSPACE_SYNC_TOPIC, WorkspaceSyncMessage}},
 };
@@ -107,7 +107,7 @@ impl WorkspaceEntry {
 /// dans les tâches de fond au même titre que lui.
 #[derive(Clone)]
 pub struct WorkspaceClient {
-    network: NetworkClient,
+    network: NetworkService,
     workspaces: Arc<RwLock<HashMap<WorkspaceId, WorkspaceEntry>>>,
     events: broadcast::Sender<WorkspaceEvent>,
     /// Nœuds `Persistency` découverts directement par ce nœud (voir
@@ -124,7 +124,7 @@ impl WorkspaceClient {
     /// (réémis aux abonnés locaux, voir [`Self::subscribe`]) et
     /// [`WORKSPACE_SYNC_TOPIC`] (fusionnés dans les workspaces détenus
     /// localement).
-    pub fn new(network: NetworkClient) -> Self {
+    pub fn new(network: NetworkService) -> Self {
         let (events, _) = broadcast::channel(WORKSPACE_EVENTS_CAPACITY);
         network.subscribe(WORKSPACE_EVENTS_TOPIC);
         network.subscribe(WORKSPACE_SYNC_TOPIC);

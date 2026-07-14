@@ -15,7 +15,7 @@ use crate::{
     mode::{executable::RustRegistry, state_graph::{catalog::store::StateGraphStore, client::StateGraphClient}},
     model::{ModelClient, catalog::store::ModelStore},
     network::{
-        actor::{NetworkActor, NetworkClient},
+        actor::{NetworkActor, NetworkService},
         cp::{self, log_store::RaftLogBackend},
         persistency as persistency_role,
         peer::NodeKind,
@@ -172,7 +172,7 @@ pub struct Marie {
     /// [`Self::tool_client`]. `Arc` pour rester accessible depuis la tâche de
     /// fond qui le peuple (voir [`Self::start`]), indépendamment de la durée
     /// de vie d'un emprunt de `&self`.
-    network: Arc<OnceLock<NetworkClient>>,
+    network: Arc<OnceLock<NetworkService>>,
     /// [`HitlClient`] de ce nœud, construit paresseusement au premier appel
     /// à [`Self::hitl_client`] — contrairement à [`ModelClient`]/
     /// [`ToolClient`]/[`ExpertClient`] (de simples enveloppes sans état
@@ -264,7 +264,7 @@ impl Marie {
     /// [`NetworkEvent`](crate::network::actor::NetworkEvent) du cluster (voir
     /// `NetworkClient::subscribe_events`), sans exécuter la logique d'un
     /// control plane, d'un worker ou d'un nœud de persistance.
-    pub async fn join(&self) -> Result<(NetworkClient, MarieHandle), anyhow::Error> {
+    pub async fn join(&self) -> Result<(NetworkService, MarieHandle), anyhow::Error> {
         let swarm = start_swarm(NodeKind::Client, |_| {}).await?;
         let (actor, client) = NetworkActor::new(swarm, self.secret.clone());
         let _ = self.network.set(client.clone());

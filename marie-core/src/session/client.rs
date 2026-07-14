@@ -16,7 +16,7 @@ use yrs::{StateVector, updates::{decoder::Decode, encoder::Encode}};
 use crate::{
     agent::{frame::AgentFrame, status::AgentStatus},
     mode::SessionMode,
-    network::{actor::{NetworkClient, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SessionFetchRequest}},
+    network::{actor::{NetworkService, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SessionFetchRequest}},
     persistency::{
         filesystem::{FileSystem as _, OpenOptions, VFS},
         var::{SessionVarStore, VarStore},
@@ -134,7 +134,7 @@ impl SessionEntry {
 /// transiter chaque accès par la boucle mono-thread de `NetworkActor`.
 #[derive(Clone)]
 pub struct SessionClient {
-    network: NetworkClient,
+    network: NetworkService,
     sessions: Arc<RwLock<HashMap<SessionId, SessionEntry>>>,
     events: broadcast::Sender<SessionEvent>,
     /// Composition du VFS d'une session (voir [`Self::vfs`]) — `/var`/`/files`
@@ -156,7 +156,7 @@ impl SessionClient {
     /// aux abonnés locaux, voir [`Self::subscribe`]) et [`SESSION_SYNC_TOPIC`]
     /// (fusionnés dans les sessions détenues localement) — l'appelant n'a donc
     /// pas besoin de savoir filtrer ni forwarder quoi que ce soit lui-même.
-    pub fn new(network: NetworkClient, workspace_vfs: WorkspaceVfs) -> Self {
+    pub fn new(network: NetworkService, workspace_vfs: WorkspaceVfs) -> Self {
         let (events, _) = broadcast::channel(SESSION_EVENTS_CAPACITY);
         network.subscribe(SESSION_EVENTS_TOPIC);
         network.subscribe(SESSION_SYNC_TOPIC);

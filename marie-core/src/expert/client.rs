@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     expert::{catalog::ExpertId, declaration::ExpertDeclaration},
-    network::actor::NetworkClient,
+    network::actor::NetworkService,
 };
 
 #[derive(Debug, Error)]
@@ -19,11 +19,11 @@ pub enum ExpertError {
 /// le même modèle que [`crate::model::ModelClient`] et
 /// [`crate::tools::client::ToolClient`]).
 #[derive(Clone)]
-pub struct ExpertClient(NetworkClient);
+pub struct ExpertClient(NetworkService);
 
 impl ExpertClient {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self(client)
     }
 

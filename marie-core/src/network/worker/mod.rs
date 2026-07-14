@@ -24,7 +24,7 @@ use crate::{
         state_graph::StateGraph,
     },
     network::{
-        actor::{NetworkActor, NetworkClient},
+        actor::{NetworkActor, NetworkService},
         cp::rpc::{JobStateReport, RpcCall, RpcResult, RunJobRequest, SessionFetchRequest, Void, WorkspaceFetchRequest},
         peer::NodeKind,
         start_swarm,
@@ -71,7 +71,7 @@ pub async fn start_worker(
     store: Arc<dyn ObjectStore>,
     rust_registry: RustRegistry,
     mut shutdown: watch::Receiver<bool>,
-    ready: oneshot::Sender<NetworkClient>,
+    ready: oneshot::Sender<NetworkService>,
 ) -> Result<(), anyhow::Error> {
     use NodeKind::Worker;
 
@@ -195,7 +195,7 @@ async fn drain_job_tasks(job_tasks: &mut JoinSet<()>) {
 
 async fn execute_rpc(
     call: RpcCall,
-    client: &NetworkClient,
+    client: &NetworkService,
     sessions: &SessionClient,
     workspaces: &WorkspaceClient,
     rust_registry: &RustRegistry,
@@ -246,7 +246,7 @@ async fn execute_rpc(
 /// avec la réassignation côté control plane — un job sans nouvelle finira par
 /// être détecté et réassigné au prochain healthcheck manqué.
 async fn execute_and_report(
-    client: NetworkClient,
+    client: NetworkService,
     sessions: SessionClient,
     workspaces: WorkspaceClient,
     rust_registry: RustRegistry,
@@ -271,7 +271,7 @@ async fn execute_and_report(
     }
 }
 
-async fn report_job_state(client: &NetworkClient, job_id: JobId, state: JobState) -> Result<(), anyhow::Error> {
+async fn report_job_state(client: &NetworkService, job_id: JobId, state: JobState) -> Result<(), anyhow::Error> {
     client.rpc::<Void>(RpcCall::new(RpcCall::REPORT_JOB_STATE, JobStateReport { job_id, state })).await?;
     Ok(())
 }
@@ -299,7 +299,7 @@ enum RunOutcome {
 /// pour `Simple` et [`run_orchestration`] pour `Orchestration`.
 async fn run_job(
     request: RunJobRequest,
-    client: &NetworkClient,
+    client: &NetworkService,
     sessions: &SessionClient,
     workspaces: &WorkspaceClient,
     rust_registry: &RustRegistry,
@@ -388,7 +388,7 @@ async fn run_simple(sessions: &SessionClient, agents: &AgentRuntime, global_agen
 async fn run_orchestration(
     sessions: &SessionClient,
     workspaces: &WorkspaceClient,
-    client: &NetworkClient,
+    client: &NetworkService,
     global_agent_id: GlobalAgentId,
     mut orchestration: Orchestration,
 ) -> Result<RunOutcome, String> {

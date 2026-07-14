@@ -9,6 +9,7 @@ use tokio::{select, sync::{broadcast, mpsc, oneshot}};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
 
+use crate::network::Frame;
 use crate::{
     expert::{catalog::ExpertId, declaration::ExpertDeclaration},
     job::Job,
@@ -40,6 +41,7 @@ struct PendingRpc {
 }
 
 pub enum NetworkCommand {
+    SendFrame(Frame),
     RemoteProcedureCall {
         tx: oneshot::Sender<cp::rpc::RpcResult>,
         call: cp::rpc::RpcCall,
@@ -93,6 +95,7 @@ type RpcReplySlot = Arc<Mutex<Option<oneshot::Sender<cp::rpc::RpcResult>>>>;
 
 #[derive(Clone)]
 pub enum NetworkEvent {
+    ReceivedFrame(Frame),
     RequestRemoteProcedureExecution {
         tx: RpcReplySlot,
         call: cp::rpc::RpcCall,
@@ -179,7 +182,7 @@ impl Stream for NetworkEventHandler {
 }
 
 #[derive(Clone)]
-pub struct NetworkClient {
+pub struct NetworkService {
     commands: mpsc::UnboundedSender<NetworkCommand>,
     /// Diffusion des [`NetworkEvent`] de ce nœud — voir [`Self::subscribe_events`].
     events: broadcast::Sender<NetworkEvent>,
@@ -192,7 +195,7 @@ pub struct NetworkClient {
     secret: Arc<SecretManager>,
 }
 
-impl NetworkClient {
+impl NetworkService {
     /// S'abonne au flux de [`NetworkEvent`] de ce nœud. Chaque appel
     /// retourne un [`NetworkEventHandler`] indépendant, démarrant à partir de
     /// maintenant (les événements précédents ne sont pas rejoués) :
@@ -476,12 +479,12 @@ pub struct NetworkActor {
 
 impl NetworkActor {
     #[must_use]
-    pub fn new(swarm: MarieSwarm, secret: Arc<SecretManager>) -> (Self, NetworkClient) {
+    pub fn new(swarm: MarieSwarm, secret: Arc<SecretManager>) -> (Self, NetworkService) {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
         let local_peer_id = *swarm.local_peer_id();
 
-        let client = NetworkClient {
+        let client = NetworkService {
             commands: commands_tx.clone(),
             events: events_tx.clone(),
             local_peer_id,
@@ -538,12 +541,20 @@ impl NetworkActor {
         use SwarmEvent::Behaviour;
         use request_response::Event as ReqResEvent;
         use identify::Event as IdEvent;
-        use super::MarieBehaviourEvent::{Rpc, Identify, NodeGossip, Mdns};
+        use super::MarieBehaviourEvent::{Rpc, Identify, NodeGossip, Mdns, Oneway};
 
         loop {
             select! {
                 Some(cmd) = self.commands_rx.recv() => {
                     match cmd {
+                        SendFrame(frame) => {
+                            let Some(dest) = frame.destination.clone() else { 
+                                warn!("cannot send frame because the destination is unknown");
+                                continue;
+                            };
+                            let peer_id: PeerId = serde_json::from_value(dest).unwrap();
+                            self.swarm.behaviour_mut().oneway.send_request(&peer_id, frame);
+                        },
                         RemoteProcedureCall{tx, call, to} => {
 
                             let retry_via_cp_failover = to.is_none();
@@ -583,6 +594,11 @@ impl NetworkActor {
                 },
                 event = self.swarm.select_next_some() => {
                     match event {
+                        Behaviour(Oneway(ReqResEvent::Message{peer, message: request_response::Message::Request{request: mut frame, ..}, ..})) => {
+                            let source = serde_json::to_value(&peer).unwrap();
+                            frame.source = Some(source);
+                            let _ = self.events_tx.send(NetworkEvent::ReceivedFrame(frame));
+                        },
                         // Un handler a été enregistré dynamiquement pour ce nom : on
                         // l'exécute directement, sans remonter au niveau applicatif.
                         Behaviour(Rpc(ReqResEvent::Message{peer: _, message: request_response::Message::Request{request: call, channel, ..}, ..}))

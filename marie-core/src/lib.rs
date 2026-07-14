@@ -13,6 +13,7 @@ pub mod job;
 pub mod persistency;
 pub mod node;
 pub mod workspace;
+pub mod rpc;
 
 pub use node::{Marie, MarieConfig, MarieHandle, NodeRole};
 

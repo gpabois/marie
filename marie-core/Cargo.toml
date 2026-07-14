@@ -68,6 +68,6 @@ object_store = { version = "0.14.0", features = ["aws"] }
 # pour les déploiements voulant un stockage centralisé/administré plutôt
 # qu'un fichier redb embarqué par nœud.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "json"] }
-
+futures-util.workspace = true
 [dev-dependencies]
 wiremock = "0.6.5"

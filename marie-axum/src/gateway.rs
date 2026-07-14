@@ -6,7 +6,7 @@ use marie_core::{
     hitl::client::HitlClient,
     mode::state_graph::client::StateGraphClient,
     model::ModelClient,
-    network::actor::NetworkClient,
+    network::actor::NetworkService,
     node::NotConnected,
     secret::SecretKey,
     session::client::SessionClient,
@@ -28,7 +28,7 @@ use sqlx::postgres::PgPool;
 #[derive(Clone)]
 pub struct MarieGateway {
     marie: Arc<Marie>,
-    network: NetworkClient,
+    network: NetworkService,
 }
 
 impl MarieGateway {
@@ -48,7 +48,7 @@ impl MarieGateway {
     /// exemple soumettre un job (voir `NetworkClient::spawn_job`) ou
     /// appeler un RPC personnalisé enregistré par l'appelant (voir
     /// `NetworkClient::register_rpc`).
-    pub fn network(&self) -> &NetworkClient {
+    pub fn network(&self) -> &NetworkService {
         &self.network
     }
 

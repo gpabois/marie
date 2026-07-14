@@ -7,7 +7,7 @@ use thiserror::Error;
 
 use crate::{
     agent::GlobalAgentId,
-    network::{actor::NetworkClient, cp::rpc::RpcCall},
+    network::{actor::NetworkService, cp::rpc::RpcCall},
     tools::{
         ToolCall, ToolCallError, ToolCallRequest, ToolCallResponse,
         catalog::ToolId,
@@ -42,11 +42,11 @@ pub enum ToolError {
 /// signaler, tant que ce nœud reste connecté, qu'il est prêt à exécuter les
 /// appels visant ce tool — voir `network::cp::DynamicRpcRegistry`.
 #[derive(Clone)]
-pub struct ToolClient(NetworkClient);
+pub struct ToolClient(NetworkService);
 
 impl ToolClient {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self(client)
     }
 

@@ -13,7 +13,7 @@ use crate::{
     agent::GlobalAgentId,
     hitl::{ASK_HUMAN_TOOL, Answer, HitlError, HumanInputAnswer, HumanInputRequest, Question, tool_declaration},
     id::ID,
-    network::actor::{NetworkClient, NetworkEvent, NetworkEventHandler},
+    network::actor::{NetworkService, NetworkEvent, NetworkEventHandler},
     tools::{client::ToolClient, declaration::ToolId},
 };
 
@@ -74,7 +74,7 @@ impl Stream for HitlRequestHandler {
 /// être threadé dans les tâches de fond au même titre qu'eux.
 #[derive(Clone)]
 pub struct HitlClient {
-    network: NetworkClient,
+    network: NetworkService,
     /// Formulaires en vol émis par ce nœud, en attente de leur
     /// [`HumanInputAnswer`] — retirée dès la première réponse reçue (voir
     /// [`ingest_network_events`]), les suivantes pour le même `id` sont
@@ -90,7 +90,7 @@ impl HitlClient {
     /// pour dispatcher les messages gossipés sur [`HITL_TOPIC`] — l'appelant
     /// n'a donc pas besoin de savoir filtrer quoi que ce soit lui-même.
     #[must_use]
-    pub fn new(network: NetworkClient) -> Self {
+    pub fn new(network: NetworkService) -> Self {
         network.subscribe(HITL_TOPIC);
 
         let pending = Arc::new(Mutex::new(HashMap::new()));

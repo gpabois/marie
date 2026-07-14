@@ -1,4 +1,5 @@
 use libp2p::{StreamProtocol, Swarm, gossipsub, identify, mdns, request_response, swarm::NetworkBehaviour};
+use serde::{Deserialize, Serialize};
 use tracing::info;
 
 use crate::{job, network::{peer::NodeKind}};
@@ -9,13 +10,22 @@ pub mod cp;
 pub mod actor;
 pub mod persistency;
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frame {
+    channel: String,
+    destination: Option<serde_json::Value>,
+    source: Option<serde_json::Value>,
+    payload: Vec<u8>
+}
+
 #[derive(NetworkBehaviour)]
 pub struct MarieBehaviour {
     pub worker_gossip: gossipsub::Behaviour,
     pub node_gossip: gossipsub::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
     pub identify: identify::Behaviour,
-    pub rpc: cp::rpc::Behaviour
+    pub rpc: cp::rpc::Behaviour,
+    pub oneway: request_response::json::Behaviour<Frame, ()>
 }
 
 pub type MarieSwarm = Swarm<MarieBehaviour>;
@@ -43,7 +53,12 @@ pub async fn start_swarm<Init: Fn(&mut MarieSwarm)>(kind: NodeKind, init: Init) 
                 ], request_response::Config::default()
             );
 
-            MarieBehaviour { mdns, identify, worker_gossip, rpc: cp_rpc, node_gossip }
+            let oneway = request_response::json::Behaviour::new([
+                (StreamProtocol::new("/marie/one-way/1.0.0"), request_response::ProtocolSupport::Full)
+                ], request_response::Config::default()
+            );
+
+            MarieBehaviour { mdns, identify, worker_gossip, rpc: cp_rpc, node_gossip, oneway }
         })?
         .build();
 

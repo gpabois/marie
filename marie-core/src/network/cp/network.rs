@@ -6,7 +6,7 @@ use openraft::raft::{
     VoteRequest, VoteResponse,
 };
 
-use crate::network::actor::NetworkClient;
+use crate::network::actor::NetworkService;
 use crate::network::cp::rpc::RpcCall;
 use crate::network::cp::types::{RaftNode, RaftNodeId, TypeConfig};
 
@@ -26,12 +26,12 @@ where
 /// Construit un [`Network`] par nœud cible, branché sur le canal libp2p partagé
 /// du control plane (voir [`RaftNetworkFactory`]).
 pub struct NetworkFactory {
-    client: NetworkClient,
+    client: NetworkService,
 }
 
 impl NetworkFactory {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self { client }
     }
 }
@@ -50,7 +50,7 @@ impl RaftNetworkFactory<TypeConfig> for NetworkFactory {
 /// Implémentation de [`RaftNetwork`] pour un nœud Raft distant, adressé par son
 /// `PeerId` libp2p et joignable via [`NetworkClient::rpc_to`].
 pub struct Network {
-    client: NetworkClient,
+    client: NetworkService,
     peer_id: Option<PeerId>,
 }
 

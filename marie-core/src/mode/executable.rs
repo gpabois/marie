@@ -11,7 +11,7 @@ use crate::{
     expert::client::ExpertClient,
     hitl::client::HitlClient,
     model::ModelClient,
-    network::actor::NetworkClient,
+    network::actor::NetworkService,
     tools::client::ToolClient,
 };
 
@@ -171,7 +171,7 @@ pub struct AgentRuntime {
 
 impl AgentRuntime {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self {
             experts: ExpertClient::new(client.clone()),
             model: ModelClient::new(client.clone()),

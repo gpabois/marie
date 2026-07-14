@@ -4,7 +4,7 @@ use thiserror::Error;
 
 use crate::{
     mode::state_graph::{StateGraph, StateGraphError, catalog::StateGraphId, declaration::StateGraphDeclaration},
-    network::actor::NetworkClient,
+    network::actor::NetworkService,
 };
 
 #[derive(Debug, Error)]
@@ -29,11 +29,11 @@ pub enum StateGraphClientError {
 /// pour instancier un [`StateGraph`] exécutable à partir d'une déclaration
 /// nommée du catalogue (voir [`Self::instantiate`]).
 #[derive(Clone)]
-pub struct StateGraphClient(NetworkClient);
+pub struct StateGraphClient(NetworkService);
 
 impl StateGraphClient {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self(client)
     }
 

@@ -5,7 +5,7 @@ use crate::id::ID;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{model::{catalog::ModelId, declaration::Model}, network::actor::NetworkClient, tools::{ToolCall, ToolSignature}};
+use crate::{model::{catalog::ModelId, declaration::Model}, network::actor::NetworkService, tools::{ToolCall, ToolSignature}};
 
 pub mod catalog;
 pub mod declaration;
@@ -32,11 +32,11 @@ pub struct ModelResponse {
 }
 
 #[derive(Clone)]
-pub struct ModelClient(NetworkClient);
+pub struct ModelClient(NetworkService);
 
 impl ModelClient {
     #[must_use]
-    pub fn new(client: NetworkClient) -> Self {
+    pub fn new(client: NetworkService) -> Self {
         Self(client)
     }
 

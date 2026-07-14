@@ -11,7 +11,7 @@ use yrs::{StateVector, updates::{decoder::Decode, encoder::Encode}};
 
 use crate::{
     network::{
-        actor::{NetworkActor, NetworkClient, NetworkEvent},
+        actor::{NetworkActor, NetworkService, NetworkEvent},
         cp::rpc::{RpcCall, RpcResult, SessionFetchRequest, WorkspaceFetchRequest},
         peer::NodeKind,
         start_swarm,
@@ -53,7 +53,7 @@ pub async fn start_persistency(
     pool: PgPool,
     object_store: Arc<dyn ObjectStore>,
     mut shutdown: watch::Receiver<bool>,
-    ready: oneshot::Sender<NetworkClient>,
+    ready: oneshot::Sender<NetworkService>,
 ) -> Result<(), anyhow::Error> {
     use NodeKind::Persistency;
 
@@ -148,7 +148,7 @@ async fn execute_rpc(
     store: &Arc<dyn SessionStore>,
     workspace_store: &Arc<dyn WorkspaceStore>,
     workspace_vfs: &WorkspaceVfs,
-    client: &NetworkClient,
+    client: &NetworkService,
 ) -> Result<serde_json::Value, anyhow::Error> {
     match call.name.as_str() {
         RpcCall::FETCH_SESSION => {
@@ -202,7 +202,7 @@ async fn execute_rpc(
 /// concurrentes dans `YrsSession::from_diff`) : on récupère alors l'état
 /// complet auprès de `source`, le pair qui vient de gossiper ce diff et qui
 /// le détient donc forcément.
-async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkClient, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
+async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
     let message: SessionSyncMessage = serde_json::from_slice(data)?;
 
     let mut session = match store.get(&message.session_id).await? {
@@ -223,7 +223,7 @@ async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkClie
 /// durable — même principe que [`ingest_session_diff`] (voir sa doc pour la
 /// justification de la reconstruction complète depuis `source` en cas de
 /// premier diff pour ce workspace).
-async fn ingest_workspace_diff(store: &Arc<dyn WorkspaceStore>, client: &NetworkClient, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
+async fn ingest_workspace_diff(store: &Arc<dyn WorkspaceStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
     let message: WorkspaceSyncMessage = serde_json::from_slice(data)?;
 
     let mut workspace = match store.get(&message.workspace_id).await? {

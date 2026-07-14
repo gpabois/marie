@@ -1,0 +1,12 @@
+[package]
+name = "marie-gateway"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.103"
+
+marie-core = {path = "../marie-core"}
+serde = { workspace = true, features = ["serde_derive"] }
+serde_json.workspace = true
+
