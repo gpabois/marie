@@ -48,6 +48,7 @@ impl Borrow<str> for ModelId {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum Model {
     OpenAICompatible {
+        id: String,
         base_url: String,
         client_id: String,
         api_key: String,
@@ -77,8 +78,9 @@ impl Model {
     #[must_use]
     pub fn encrypt(&self, api_key: EncryptedSecret) -> EncryptedModel {
         match self {
-            Self::OpenAICompatible { base_url, client_id, model, system_prompt, .. } => {
+            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, .. } => {
                 EncryptedModel::OpenAICompatible {
+                    id: id.clone(),
                     base_url: base_url.clone(),
                     client_id: client_id.clone(),
                     api_key,
@@ -98,6 +100,7 @@ impl Model {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum EncryptedModel {
     OpenAICompatible {
+        id: String,
         base_url: String,
         client_id: String,
         api_key: EncryptedSecret,
@@ -119,10 +122,10 @@ impl EncryptedModel {
     /// localement (voir `NetworkClient::decrypt_secret` ou
     /// `model::catalog::store::decrypt_from_storage`).
     #[must_use]
-    pub fn into_model(self, api_key: String) -> Model {
+    pub fn decrypt(self, api_key: String) -> Model {
         match self {
-            Self::OpenAICompatible { base_url, client_id, model, system_prompt, .. } => {
-                Model::OpenAICompatible { base_url, client_id, api_key, model, system_prompt }
+            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, .. } => {
+                Model::OpenAICompatible { id, base_url, client_id, api_key, model, system_prompt }
             }
         }
     }

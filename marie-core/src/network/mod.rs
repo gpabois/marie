@@ -9,6 +9,8 @@ pub mod worker;
 pub mod cp;
 pub mod actor;
 pub mod persistency;
+pub mod rpc;
+pub mod mux;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Frame {

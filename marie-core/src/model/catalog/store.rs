@@ -90,7 +90,7 @@ pub fn encrypt_for_storage(declaration: &Model, secret: &SecretManager) -> Secre
 pub fn decrypt_from_storage(encrypted: &EncryptedModel, secret: &SecretManager) -> SecretResult<Model> {
     let storage_key = secret.derive_storage_key()?;
     let api_key = secret.decrypt_api_key(encrypted.api_key(), &storage_key)?;
-    Ok(encrypted.clone().into_model(api_key))
+    Ok(encrypted.clone().decrypt(api_key))
 }
 
 /// Stockage CRUD local du catalogue de modèles (voir

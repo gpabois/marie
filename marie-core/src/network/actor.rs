@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::future::Future;
 use std::sync::{Arc, Mutex};
 use anyhow::bail;
+use futures::sink::Sink;
 use futures::{Stream, StreamExt as _, future::BoxFuture};
 use libp2p::{Multiaddr, PeerId, gossipsub, identify, mdns, request_response::{self, OutboundRequestId, ResponseChannel}, swarm::SwarmEvent};
 use serde::{Serialize, de::DeserializeOwned};
@@ -9,7 +10,9 @@ use tokio::{select, sync::{broadcast, mpsc, oneshot}};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
 
+use crate::layer::Layer;
 use crate::network::Frame;
+use crate::network::actor::NetworkCommand::SendFrame;
 use crate::{
     expert::{catalog::ExpertId, declaration::ExpertDeclaration},
     job::Job,
@@ -42,6 +45,11 @@ struct PendingRpc {
 
 pub enum NetworkCommand {
     SendFrame(Frame),
+    Subscribe(gossipsub::IdentTopic),
+    Publish {
+        topic: gossipsub::IdentTopic,
+        payload: Vec<u8>
+    },
     RemoteProcedureCall {
         tx: oneshot::Sender<cp::rpc::RpcResult>,
         call: cp::rpc::RpcCall,
@@ -131,7 +139,7 @@ pub enum NetworkEvent {
     },
     /// Message reçu sur un topic gossipsub (`node_gossip`) auquel ce nœud est
     /// abonné — voir [`NetworkClient::subscribe_gossip`].
-    GossipMessageReceived {
+    PubSubReceived {
         topic: String,
         data: Vec<u8>,
         /// Le pair qui nous a directement transmis ce message (voir
@@ -161,9 +169,9 @@ const NETWORK_EVENTS_CAPACITY: usize = 1024;
 /// ...) peuvent donc chacun observer le flux complet sans se le disputer.
 /// `Lagged` (abonné trop en retard) est absorbé silencieusement : voir
 /// [`NETWORK_EVENTS_CAPACITY`] pour les conséquences.
-pub struct NetworkEventHandler(BroadcastStream<NetworkEvent>);
+pub struct NetworkReceiver(BroadcastStream<NetworkEvent>);
 
-impl Stream for NetworkEventHandler {
+impl Stream for NetworkReceiver {
     type Item = NetworkEvent;
 
     fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
@@ -182,6 +190,49 @@ impl Stream for NetworkEventHandler {
 }
 
 #[derive(Clone)]
+pub struct NetworkSender(mpsc::UnboundedSender<NetworkCommand>);
+
+impl Sink<NetworkCommand> for NetworkSender {
+    type Error = anyhow::Error;
+
+    fn poll_ready(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn start_send(self: std::pin::Pin<&mut Self>, item: NetworkCommand) -> Result<(), Self::Error> {
+        self.0.send(item)?;
+        Ok(())
+    }
+
+    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+        std::task::Poll::Ready(Ok(()))
+    }
+
+    fn poll_close(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+       std::task::Poll::Ready(Ok(()))
+    }
+}
+
+pub struct NetworkLayer(NetworkSender, NetworkReceiver);
+
+impl Layer for NetworkLayer {
+    type Send = NetworkCommand;
+    type Received = NetworkEvent;
+    type Sender = NetworkSender;
+    type Receiver = NetworkReceiver;
+
+    fn split(self) -> (Self::Sender, Self::Receiver) {
+        (self.0, self.1)
+    }
+}
+
+impl NetworkLayer {
+    pub fn split(self) -> (NetworkSender, NetworkReceiver) {
+        (self.0, self.1)
+    }
+}
+
+#[derive(Clone)]
 pub struct NetworkService {
     commands: mpsc::UnboundedSender<NetworkCommand>,
     /// Diffusion des [`NetworkEvent`] de ce nœud — voir [`Self::subscribe_events`].
@@ -196,6 +247,19 @@ pub struct NetworkService {
 }
 
 impl NetworkService {
+    /// Récupère la couche de transport du réseau
+    pub fn transport(&self) -> NetworkLayer {
+        let sender = NetworkSender(self.commands.clone());
+        let receiver = NetworkReceiver(BroadcastStream::new(self.events.subscribe()));
+        NetworkLayer(sender, receiver)
+    }
+
+    /// Send a frame to a peer
+    pub fn send_frame(&self, frame: Frame) -> Result<(), anyhow::Error> {
+        self.commands.send(SendFrame(frame))?;
+        Ok(())
+    }
+
     /// S'abonne au flux de [`NetworkEvent`] de ce nœud. Chaque appel
     /// retourne un [`NetworkEventHandler`] indépendant, démarrant à partir de
     /// maintenant (les événements précédents ne sont pas rejoués) :
@@ -204,8 +268,8 @@ impl NetworkService {
     /// `GossipMessageReceived` et aux `PersistencyPeerDiscovered`, sans se
     /// disputer la consommation avec la boucle applicative qui doit
     /// répondre aux `RequestRemoteProcedureExecution`).
-    pub fn subscribe_events(&self) -> NetworkEventHandler {
-        NetworkEventHandler(BroadcastStream::new(self.events.subscribe()))
+    pub fn subscribe_events(&self) -> NetworkReceiver {
+        NetworkReceiver(BroadcastStream::new(self.events.subscribe()))
     }
 
     /// Récupère la déclaration d'un modèle auprès du control plane. La clé
@@ -222,7 +286,7 @@ impl NetworkService {
         };
 
         let api_key = self.decrypt_secret(encrypted.api_key())?;
-        Ok(Some(encrypted.into_model(api_key)))
+        Ok(Some(encrypted.decrypt(api_key)))
     }
 
     /// Liste tout le catalogue de modèles connu du control plane. Comme
@@ -235,7 +299,7 @@ impl NetworkService {
             .into_iter()
             .map(|(id, encrypted)| {
                 let api_key = self.decrypt_secret(encrypted.api_key())?;
-                Ok((id, encrypted.into_model(api_key)))
+                Ok((id, encrypted.decrypt(api_key)))
             })
             .collect()
     }
@@ -446,7 +510,6 @@ impl NetworkService {
         }
     }
 }
-
 pub struct NetworkActor {
     swarm: MarieSwarm,
     // Diffusion des `NetworkEvent` (voir `NetworkClient::subscribe_events`)
@@ -490,6 +553,7 @@ impl NetworkActor {
             local_peer_id,
             secret: secret.clone(),
         };
+
         let actor = NetworkActor {
             swarm,
             events_tx,
@@ -547,13 +611,41 @@ impl NetworkActor {
             select! {
                 Some(cmd) = self.commands_rx.recv() => {
                     match cmd {
-                        SendFrame(frame) => {
+                        SendFrame(mut frame) => {
+                            // Le frame n'a pas de source, on va l'ajouter.
+                            // Le frame peut comporter une source notamment dans un cas de forward.
+                            if frame.source.is_none() {
+                                frame.source = Some(serde_json::to_value(self.swarm.local_peer_id()).unwrap());
+                            }
+                            
+                            // Si on a pas de destination mais que c'est un frame RPC, 
+                            // on va le forwarder au control plane par défaut.
+                            if frame.destination.is_none() 
+                                && frame.channel.as_str() == "rpc" 
+                                && let Some(cp_peer_id) = self.cp_peer_id 
+                            {
+                                warn!("rpc forwarded to the control plane");
+                                frame.destination = Some(serde_json::to_value(cp_peer_id).unwrap());                                 
+                            }
+
+                            // on a pas de destinataire, c'est plus compliqué.
                             let Some(dest) = frame.destination.clone() else { 
-                                warn!("cannot send frame because the destination is unknown");
+                                warn!("cannot send frame directly because the destination is unknown, will drop it.");
                                 continue;
                             };
+
                             let peer_id: PeerId = serde_json::from_value(dest).unwrap();
                             self.swarm.behaviour_mut().oneway.send_request(&peer_id, frame);
+                        },
+                        Subscribe(topic) => {
+                            if let Err(error) = self.swarm.behaviour_mut().node_gossip.subscribe(&topic) {
+                                warn!(%error, %topic, "abonnement gossip échoué");
+                            }
+                        },
+                        Publish{topic, payload} => {
+                            if let Err(error) = self.swarm.behaviour_mut().node_gossip.publish(topic.hash(), payload) {
+                                warn!(%error, %topic, "publication gossip échouée");
+                            }                            
                         },
                         RemoteProcedureCall{tx, call, to} => {
 
@@ -733,8 +825,8 @@ impl NetworkActor {
                             }
                         },
                         Behaviour(NodeGossip(gossipsub::Event::Message { propagation_source, message, .. })) => {
-                            use NetworkEvent::GossipMessageReceived;
-                            let _ = self.events_tx.send(GossipMessageReceived {
+                            use NetworkEvent::PubSubReceived;
+                            let _ = self.events_tx.send(PubSubReceived {
                                 topic: message.topic.to_string(),
                                 data: message.data,
                                 source: propagation_source,

@@ -143,7 +143,7 @@ pub async fn start_worker(
                     | WorkerPeerDiscovered { .. }
                     | PersistencyPeerDiscovered { .. }
                     | PeerDisconnected { .. }
-                    | GossipMessageReceived { .. } => {}
+                    | PubSubReceived { .. } => {}
                 }
             }
             result = shutdown.changed(), if !shutdown_gone => {

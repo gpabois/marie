@@ -13,7 +13,7 @@ use yrs::{StateVector, updates::{decoder::Decode, encoder::Encode}};
 
 use crate::{
     agent::context::ContextEntry,
-    network::{actor::{NetworkService, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SetSessionWorkspaceRequest, WorkspaceFetchRequest}},
+    network::{actor::{NetworkService, NetworkEvent, NetworkReceiver}, cp::rpc::{RpcCall, SetSessionWorkspaceRequest, WorkspaceFetchRequest}},
     session::SessionId,
     workspace::{WorkspaceApi, WorkspaceId, crdt::YrsWorkspace, sync::{WORKSPACE_SYNC_TOPIC, WorkspaceSyncMessage}},
 };
@@ -443,13 +443,13 @@ impl WorkspaceClient {
 /// notamment la note sur la fenêtre de course entre [`WorkspaceClient::acquire`]
 /// et un diff reçu entre-temps).
 async fn ingest_network_events(
-    mut network_events: NetworkEventHandler,
+    mut network_events: NetworkReceiver,
     events: broadcast::Sender<WorkspaceEvent>,
     workspaces: Arc<RwLock<HashMap<WorkspaceId, WorkspaceEntry>>>,
     known_persistency_peers: Arc<RwLock<HashSet<PeerId>>>,
 ) {
     while let Some(event) = network_events.next().await {
-        let NetworkEvent::GossipMessageReceived { topic, data, .. } = event else {
+        let NetworkEvent::PubSubReceived { topic, data, .. } = event else {
             if let NetworkEvent::PersistencyPeerDiscovered { peer_id, .. } = event {
                 known_persistency_peers.write().await.insert(peer_id);
             }

@@ -16,7 +16,7 @@ use yrs::{StateVector, updates::{decoder::Decode, encoder::Encode}};
 use crate::{
     agent::{frame::AgentFrame, status::AgentStatus},
     mode::SessionMode,
-    network::{actor::{NetworkService, NetworkEvent, NetworkEventHandler}, cp::rpc::{RpcCall, SessionFetchRequest}},
+    network::{actor::{NetworkService, NetworkEvent, NetworkReceiver}, cp::rpc::{RpcCall, SessionFetchRequest}},
     persistency::{
         filesystem::{FileSystem as _, OpenOptions, VFS},
         var::{SessionVarStore, VarStore},
@@ -667,13 +667,13 @@ impl SessionClient {
 /// topic gossipsub : ce sont les pairs que ce nœud a lui-même identifiés via
 /// libp2p `identify`, pas ceux relayés par le control plane.
 async fn ingest_network_events(
-    mut network_events: NetworkEventHandler,
+    mut network_events: NetworkReceiver,
     events: broadcast::Sender<SessionEvent>,
     sessions: Arc<RwLock<HashMap<SessionId, SessionEntry>>>,
     known_persistency_peers: Arc<RwLock<HashSet<PeerId>>>,
 ) {
     while let Some(event) = network_events.next().await {
-        let NetworkEvent::GossipMessageReceived { topic, data, .. } = event else {
+        let NetworkEvent::PubSubReceived { topic, data, .. } = event else {
             if let NetworkEvent::PersistencyPeerDiscovered { peer_id, .. } = event {
                 known_persistency_peers.write().await.insert(peer_id);
             }

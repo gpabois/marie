@@ -9,6 +9,12 @@ use tokio::task::JoinHandle;
 use tracing::error;
 use typed_builder::TypedBuilder;
 
+use crate::layer::{IntoService as _, LayerExt};
+use crate::network::mux::FrameLayer;
+use crate::network::rpc::RpcMuxLayer;
+use crate::rpc::router::{RpcRelayLayer, RpcRelayService};
+use crate::rpc::{RpcClientActor, RpcClientService, RpcServerService};
+
 use crate::{
     expert::{catalog::store::ExpertStore, client::ExpertClient},
     hitl::client::HitlClient,
@@ -173,6 +179,14 @@ pub struct Marie {
     /// fond qui le peuple (voir [`Self::start`]), indépendamment de la durée
     /// de vie d'un emprunt de `&self`.
     network: Arc<OnceLock<NetworkService>>,
+
+    /// Service dédié à relayer les appels à procédures distants
+    rpc_relay: RpcRelayService,
+    /// Servicé dédié à faire des appels à procédure distants (RPC)
+    rpc_client: Arc<OnceLock<RpcClientService>>,
+    /// Service dédié à servir des RPC
+    rpc_server: Arc<OnceLock<RpcServerService>>,
+    
     /// [`HitlClient`] de ce nœud, construit paresseusement au premier appel
     /// à [`Self::hitl_client`] — contrairement à [`ModelClient`]/
     /// [`ToolClient`]/[`ExpertClient`] (de simples enveloppes sans état
@@ -206,6 +220,9 @@ impl Marie {
     pub fn new(config: MarieConfig) -> Self {
         Self {
             secret: Arc::new(SecretManager::new(&config.master_key)),
+            rpc_relay: RpcRelayService::default(),
+            rpc_client: Arc::new(OnceLock::new()),
+            rpc_server: Arc::new(OnceLock::new()),
             network: Arc::new(OnceLock::new()),
             hitl: Arc::new(OnceLock::new()),
             sessions: Arc::new(OnceLock::new()),
@@ -267,7 +284,30 @@ impl Marie {
     pub async fn join(&self) -> Result<(NetworkService, MarieHandle), anyhow::Error> {
         let swarm = start_swarm(NodeKind::Client, |_| {}).await?;
         let (actor, client) = NetworkActor::new(swarm, self.secret.clone());
+    
+        self.rpc_client.set(
+            client.transport()
+                .chain::<FrameLayer, _>(())
+                .chain::<RpcMuxLayer, _>(())
+                .into_service(())
+        );
+
+        self.rpc_server.set(
+            client.transport()
+                .chain::<FrameLayer, _>(())
+                .chain::<RpcMuxLayer, _>(())
+                .chain::<RpcRelayLayer, _>((
+                    self.rpc_relay.clone(), 
+                    client.transport()
+                        .chain::<FrameLayer, _>(())
+                        .chain::<RpcMuxLayer, _>(())
+                ))
+                .into_service(())
+        );
+
         let _ = self.network.set(client.clone());
+
+        
 
         let (shutdown_tx, mut shutdown_rx) = watch::channel(false);
         let shutdown_client = client.clone();

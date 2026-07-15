@@ -1,11 +1,15 @@
-use std::collections::HashMap;
 
 use async_openai::{Client, config::OpenAIConfig, error::OpenAIError, types::responses::{CreateResponseArgs, FunctionTool, OutputItem, Tool}};
-use crate::id::ID;
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{model::{catalog::ModelId, declaration::Model}, network::actor::NetworkService, tools::{ToolCall, ToolSignature}};
+use crate::{
+    model::declaration::EncryptedModel, 
+    rpc::{RpcClientService, RpcError, Void, client::RpcCallArgs}, 
+    secret::PeerSecretManager
+};
+
+use crate::{model::{catalog::ModelId, declaration::Model}, tools::{ToolCall, ToolSignature}};
 
 pub mod catalog;
 pub mod declaration;
@@ -21,8 +25,8 @@ pub enum ModelError {
     },
     #[error("modèle inconnu : {0}")]
     UnknownModel(ModelId),
-    #[error("échec de récupération du modèle : {0}")]
-    Network(String),
+    #[error("[Model] échec de l'appel distant : {0}")]
+    RpcError(#[from] RpcError),
 }
 
 #[derive(Debug, Serialize)]
@@ -32,12 +36,18 @@ pub struct ModelResponse {
 }
 
 #[derive(Clone)]
-pub struct ModelClient(NetworkService);
+pub struct ModelClient {
+    rpc: RpcClientService,
+    secret: PeerSecretManager
+}
 
 impl ModelClient {
     #[must_use]
-    pub fn new(client: NetworkService) -> Self {
-        Self(client)
+    pub fn new(rpc: RpcClientService, secret: PeerSecretManager) -> Self {
+        Self {
+            rpc,
+            secret
+        }
     }
 
     /// Récupère la déclaration d'un modèle auprès du control plane. La clé
@@ -46,27 +56,66 @@ impl ModelClient {
     /// en clair qu'à la réception, localement.
     pub async fn get(&self, id: impl Into<ModelId>) -> Result<Model, ModelError> {
         let id = id.into();
+        
+        let maybe_model = RpcCallArgs::builder()
+            .name("rpc/models/get")
+            .args(id.clone())
+            .build()
+            .call::<Option<EncryptedModel>>(&self.0)
+            .await?
+            .map(|encrypted| self.decrypt(encrypted));
 
-        self.0
-            .get_model(id.clone())
-            .await
-            .map_err(|error| ModelError::Network(error.to_string()))?
-            .ok_or(ModelError::UnknownModel(id))
+        maybe_model.ok_or_else(|| ModelError::UnknownModel(id))
     }
 
     /// Liste tout le catalogue de modèles connu du control plane.
-    pub async fn list(&self) -> Result<HashMap<ModelId, Model>, ModelError> {
-        self.0.list_models().await.map_err(|error| ModelError::Network(error.to_string()))
+    pub async fn list(&self) -> Result<Vec<Model>, ModelError> {
+        let list = RpcCallArgs::builder()
+            .name("rpc/models/list")
+            .args(Void)
+            .build()
+            .call::<Vec<EncryptedModel>>(&self.rpc)
+            .await?
+            .into_iter()
+            .map(|encrypted| self.decrypt(encrypted));
+
+        Ok(list.collect())
     }
 
     /// Crée ou remplace la déclaration d'un modèle dans le catalogue.
-    pub async fn set(&self, id: impl Into<ModelId>, declaration: Model) -> Result<(), ModelError> {
-        self.0.set_model(id, declaration).await.map_err(|error| ModelError::Network(error.to_string()))
+    pub async fn upsert(&self, model: Model) -> Result<(), ModelError> {
+        RpcCallArgs::builder()
+            .name("rpc/models/upsert")
+            .args(model)
+            .build()
+            .call::<Void>(&self.rpc)
+            .await?;
+
+        Ok(())
     }
 
     /// Retire un modèle du catalogue.
     pub async fn remove(&self, id: impl Into<ModelId>) -> Result<(), ModelError> {
-        self.0.remove_model(id).await.map_err(|error| ModelError::Network(error.to_string()))
+        RpcCallArgs::builder()
+            .name("rpc/models/delete")
+            .args(id.into())
+            .build()
+            .call::<Void>(&self.rpc)
+            .await?;
+
+        Ok(())
+    }
+
+    fn decrypt(&self, model: EncryptedModel) -> Model {
+        let api_key = model.api_key();
+        let api_key = self.secret.decrypt(api_key).unwrap();
+        model.decrypt(api_key)
+    }
+
+    fn encrypt(&self, model: Model) -> EncryptedModel {
+        let api_key = model.api_key();
+        let api_key = self.secret.encrypt(api_key).unwrap();
+        model.encrypt(api_key)
     }
 }
 

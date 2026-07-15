@@ -14,6 +14,7 @@ pub mod persistency;
 pub mod node;
 pub mod workspace;
 pub mod rpc;
+pub mod sink;
+pub mod layer;
 
 pub use node::{Marie, MarieConfig, MarieHandle, NodeRole};
-

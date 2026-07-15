@@ -1,31 +1,31 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use futures::{Sink, SinkExt as _, Stream, StreamExt};
+use futures::{SinkExt as _, StreamExt};
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::{select, sync::{mpsc, oneshot}, task::JoinHandle};
+use tokio::{select, sync::{mpsc, oneshot}};
+use typed_builder::TypedBuilder;
 
-use crate::{id::IdGenerator, rpc::{RpcCall, RpcCallId, RpcError, RpcReply, RpcResult}};
+use crate::{id::IdGenerator, layer::Layer, rpc::{RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
 
-pub struct RpcHandler {
+struct RpcHandler {
     sent_at: std::time::Instant,
     tx: oneshot::Sender<RpcResult>
 }
 
-
-pub struct RpcClient {
-    id: IdGenerator,
-    ev_tx: mpsc::UnboundedSender<RpcEvent>,
-    incoming_task: JoinHandle<()>,
-    outcoming_task: JoinHandle<()>,
-}
+#[derive(Default)]
+pub struct RpcClientActor;
 
 
-pub struct RpcRequest {
+struct RpcRequest {
     id: RpcCallId,
     call: RpcCall,
     tx: oneshot::Sender<RpcResult>
 }
 
+enum RpcCommand {
+    Execute(RpcRequest),
+    Shutdown
+}
 
 enum RpcEvent {
     OnReply(RpcReply),
@@ -33,15 +33,15 @@ enum RpcEvent {
     Shutdown
 }
 
-impl RpcClient {
-    pub fn new<I, O>(outcoming: O, incoming: I) -> Self 
-        where O: Sink<RpcCall> + Send + 'static,
-              I: Stream<Item=RpcReply> + Send + 'static
-    {
-        let mut outcoming = Box::pin(outcoming);
-        let mut incoming = Box::pin(incoming);
+impl RpcClientActor {
+    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcClientService 
+    {   
+        let (tx, rx) = layer.split();
+        let mut outcoming = Box::pin(tx);
+        let mut incoming = Box::pin(rx);
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RpcCall>();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<RpcCommand>();
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<RpcEvent>();
 
         let ev_tx_1 = ev_tx.clone();
@@ -50,10 +50,13 @@ impl RpcClient {
                 select! {
                     Some(call) = out_rx.recv() => {
                         let id = call.id;
-                        match outcoming.send(call).await {
+                        
+                        match outcoming.send(RpcMessage::Call(call)).await {
                             Err(_) => {
                                 let reply = RpcReply {
                                     id,
+                                    destination: None,
+                                    source: None,
                                     result: RpcResult::Error(RpcError::Custom(String::default()))
                                 };
                                 
@@ -68,9 +71,11 @@ impl RpcClient {
 
         let ev_tx_2 = ev_tx.clone();
         let incoming_task = tokio::spawn(async move {
+            use RpcMessage::Reply;
+
             loop {
                 select! {
-                    Some(reply) = incoming.next() => {
+                    Some(Reply(reply)) = incoming.next() => {
                         let _ = ev_tx_2.send(RpcEvent::OnReply(reply));
                     }
                 }
@@ -127,61 +132,74 @@ impl RpcClient {
             })
         });
 
-        Self {
-            id: IdGenerator::default(),
-            ev_tx,
-            outcoming_task,
-            incoming_task,
+        let id = IdGenerator::default();
+
+        let inner = Arc::new(RpcClientInner(cmd_tx.clone()));
+
+        RpcClientService {
+            tx: cmd_tx,
+            id: Arc::new(id),
+            inner
         }
     }
 }
 
-impl Drop for RpcClient {
+struct RpcClientInner(mpsc::UnboundedSender<RpcCommand>);
+
+impl Drop for RpcClientInner {
     fn drop(&mut self) {
-        let _ = self.ev_tx.send(RpcEvent::Shutdown);
-        self.outcoming_task.abort();
-        self.incoming_task.abort();
+        use RpcCommand::Shutdown;
+
+        self.0.send(Shutdown);
     }
 }
 
+#[derive(Clone)]
+pub struct RpcClientService {
+    tx: mpsc::UnboundedSender<RpcCommand>,
+    id: Arc<IdGenerator>,
+    // used to stop the actor if the last client has been dropped
+    inner: Arc<RpcClientInner>
+}
 
-impl RpcClient {
-    pub async fn call_target<R: DeserializeOwned>(&mut self, name: impl ToString, args: impl Serialize, target: impl Serialize) 
-        -> Result<R, RpcError>
+#[derive(TypedBuilder)]
+pub struct RpcCallArgs {
+    #[builder(setter(transform = |x: impl ToString| x.to_string()))]
+    name: String,
+    #[builder(setter(transform = |x: impl Serialize| serde_json::to_value(x).unwrap()))]
+    args: serde_json::Value,
+    #[builder(
+        default, 
+        setter(transform = |value: impl Serialize| serde_json::to_value(&value).map(Some).unwrap_or(None))
+    )]
+    source: Option<serde_json::Value>,
+    #[builder(
+        default, 
+        setter(transform = |value: impl Serialize| serde_json::to_value(&value).map(Some).unwrap_or(None))
+    )]
+    destination: Option<serde_json::Value>
+}
+
+impl RpcCallArgs {
+    #[inline]
+    pub fn call<R: DeserializeOwned>(self, client: &RpcClientService) 
+    -> impl Future<Output=Result<R, RpcError>> 
     {
-        let id = RpcCallId(self.id.next_id());
-        let call = RpcCall {
-            id,
-            name: name.to_string(),
-            args: serde_json::to_value(args).unwrap(),
-            target: Some(serde_json::to_value(target).unwrap())
-        };
-
-        let (tx, rx) = oneshot::channel::<RpcResult>();
-        
-        let request = RpcRequest {
-            id,
-            call,
-            tx,
-        };
-        
-        let _ = self.ev_tx.send(RpcEvent::OnRequest(request));
-
-        let res = rx.await.unwrap();
-        match res {
-            RpcResult::Ok(value) => Ok(serde_json::from_value(value).unwrap()),
-            RpcResult::Error(rpc_error) => Err(rpc_error),
-        }
+        client.call::<R>(self)
     }
-    pub async fn call<R: DeserializeOwned>(&mut self, name: impl ToString, args: impl Serialize) 
-        -> Result<R, RpcError>
-    {
+}
+
+impl RpcClientService {
+    pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
+        use RpcCommand::Execute;
+
         let id = RpcCallId(self.id.next_id());
         let call = RpcCall {
             id,
-            name: name.to_string(),
-            args: serde_json::to_value(args).unwrap(),
-            target: None
+            name: args.name,
+            args: args.args,
+            destination: args.destination,
+            source: args.source
         };
 
         let (tx, rx) = oneshot::channel::<RpcResult>();
@@ -192,12 +210,12 @@ impl RpcClient {
             tx,
         };
         
-        let _ = self.ev_tx.send(RpcEvent::OnRequest(request));
+        let _ = self.tx.send(Execute(request));
 
         let res = rx.await.unwrap();
         match res {
             RpcResult::Ok(value) => Ok(serde_json::from_value(value).unwrap()),
             RpcResult::Error(rpc_error) => Err(rpc_error),
-        }
+        }       
     }
 }

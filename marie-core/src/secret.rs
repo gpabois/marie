@@ -1,4 +1,4 @@
-use std::time::{Duration, Instant};
+use std::{ops::{Deref, DerefMut}, sync::{Arc, Mutex}, time::{Duration, Instant}};
 
 use chacha20poly1305::{AeadCore as _, ChaCha20Poly1305, KeyInit as _, Nonce, aead::{self, Aead}};
 use hkdf::{Hkdf, InvalidLength};
@@ -30,30 +30,79 @@ pub enum SecretError {
     Utf8DecodingFailed(std::string::FromUtf8Error)
 }
 
-pub struct SecretManager {
+#[derive(Clone)]
+pub struct PeerSecretManager {
+    global: SecretManager,
+    peer_key: [u8; 32]
+}
+
+impl PeerSecretManager {
+    pub fn encrypt(&self, secret: &str) -> SecretResult<EncryptedSecret> {
+        use SecretError::EncryptionFailed;
+
+        let cipher = ChaCha20Poly1305::new(&self.peer_key.into());
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut rand::thread_rng());
+        
+        let ciphertext = cipher
+            .encrypt(&nonce, secret.as_ref())
+            .map_err(EncryptionFailed)?;
+        
+        Ok(EncryptedSecret {
+            ciphertext,
+            nonce: nonce.to_vec(),
+            algorithm: "ChaCha20-Poly1305".to_string(),
+        })
+    }
+
+    pub fn decrypt(&self, encrypted_secret: &EncryptedSecret) -> SecretResult<String> {
+        pub use SecretError::{DecryptionFailed, Utf8DecodingFailed};
+
+        let cipher = ChaCha20Poly1305::new(&self.peer_key.into());
+        let nonce = Nonce::from_slice(&encrypted_secret.nonce);
+        
+        let plaintext = cipher
+            .decrypt(nonce, encrypted_secret.ciphertext.as_ref())
+            .map_err(DecryptionFailed)?;
+        
+        String::from_utf8(plaintext).map_err(Utf8DecodingFailed)        
+    }
+}
+
+struct Inner {
     // Stockée en mémoire lockée
     master_key: Zeroizing<[u8; 32]>,
     key_rotation_interval: Duration,
     last_rotation: Instant,
 }
 
+#[derive(Clone)]
+pub struct SecretManager(Arc<Mutex<Inner>>);
+
 impl SecretManager {
     pub fn new(master_key_bytes: &[u8; 32]) -> Self {
         let mut key = Zeroizing::new([0u8; 32]);
         key.as_mut().copy_from_slice(master_key_bytes);
         
-        Self {
+        let inner = Inner {
             master_key: key,
             key_rotation_interval: Duration::from_secs(86400), // 24h
             last_rotation: Instant::now(),
-        }
+        };
+
+        Self(Arc::new(Mutex::new(inner)))
     }
     
+    pub fn for_peer(&self, peer_id: PeerId) -> PeerSecretManager {
+        let peer_key = self.derive_node_key(&peer_id).unwrap();
+        PeerSecretManager { global: self.clone(), peer_key }
+    }
+
     /// Dérive une clé par nœud via HKDF
     pub fn derive_node_key(&self, node_id: &PeerId) -> SecretResult<SecretKey> {
         use SecretError::HkdfExpandFailed;
 
-        let hkdf = Hkdf::<Sha256>::new(None, self.master_key.as_ref());
+        let ref_mk = &self.0.lock().unwrap().master_key;
+        let hkdf = Hkdf::<Sha256>::new(None, ref_mk.as_ref());
         let mut key = [0u8; 32];
 
         hkdf.expand(node_id.to_bytes().as_ref(), &mut key)
@@ -73,7 +122,9 @@ impl SecretManager {
     pub fn derive_storage_key(&self) -> SecretResult<SecretKey> {
         use SecretError::HkdfExpandFailed;
 
-        let hkdf = Hkdf::<Sha256>::new(None, self.master_key.as_ref());
+        let ref_mk = &self.0.lock().unwrap().master_key;
+
+        let hkdf = Hkdf::<Sha256>::new(None, ref_mk.as_ref());
         let mut key = [0u8; 32];
 
         hkdf.expand(b"marie/at-rest-storage/v1", &mut key)
@@ -163,20 +214,23 @@ impl SecretManager {
     }
     
     /// Rotation des clés master
-    pub fn rotate_master_key(&mut self, new_key: &[u8; 32]) {
-        self.master_key.zeroize();
-        self.master_key.copy_from_slice(new_key);
-        self.last_rotation = Instant::now();
+    pub fn rotate_master_key(&self, new_key: &[u8; 32]) {
+        let mut guard = self.0.lock().unwrap();
+
+        guard.deref_mut().master_key.zeroize();
+        guard.deref_mut().master_key.copy_from_slice(new_key);
+        guard.deref_mut().last_rotation = Instant::now();
     }
 
     pub fn needs_rotation(&self) -> bool {
-        self.last_rotation.elapsed() >= self.key_rotation_interval
+        let guard = self.0.lock().unwrap();
+        guard.deref().last_rotation.elapsed() >= guard.deref().key_rotation_interval
     }
 }
 
 impl Drop for SecretManager {
     fn drop(&mut self) {
-        self.master_key.zeroize();
+        self.0.lock().unwrap().deref_mut().master_key.zeroize();
     }
 }
 

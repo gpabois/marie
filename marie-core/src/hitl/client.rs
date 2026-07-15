@@ -13,7 +13,7 @@ use crate::{
     agent::GlobalAgentId,
     hitl::{ASK_HUMAN_TOOL, Answer, HitlError, HumanInputAnswer, HumanInputRequest, Question, tool_declaration},
     id::ID,
-    network::actor::{NetworkService, NetworkEvent, NetworkEventHandler},
+    network::actor::{NetworkService, NetworkEvent, NetworkReceiver},
     tools::{client::ToolClient, declaration::ToolId},
 };
 
@@ -184,12 +184,12 @@ impl HitlClient {
 /// événement qui n'est pas un `GossipMessageReceived` sur ce topic est
 /// ignoré silencieusement.
 async fn ingest_network_events(
-    mut network_events: NetworkEventHandler,
+    mut network_events: NetworkReceiver,
     pending: Arc<Mutex<HashMap<ID, oneshot::Sender<HashMap<String, Answer>>>>>,
     requests: broadcast::Sender<HumanInputRequest>,
 ) {
     while let Some(event) = network_events.next().await {
-        let NetworkEvent::GossipMessageReceived { topic, data, .. } = event else {
+        let NetworkEvent::PubSubReceived { topic, data, .. } = event else {
             continue;
         };
 

@@ -550,7 +550,7 @@ pub async fn start_control_plane(
                             }
                         }
                     },
-                    GossipMessageReceived { topic, data, .. } => {
+                    PubSubReceived { topic, data, .. } => {
                         if topic == RPC_REGISTRY_TOPIC {
                             if let Ok(msg) = serde_json::from_slice::<RpcRegistryGossip>(&data) {
                                 rpc_registry.apply_gossip(msg);

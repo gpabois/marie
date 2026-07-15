@@ -104,12 +104,12 @@ pub async fn start_persistency(
                             }
                         }
                     }
-                    GossipMessageReceived { topic, data, source } if topic == SESSION_SYNC_TOPIC => {
+                    PubSubReceived { topic, data, source } if topic == SESSION_SYNC_TOPIC => {
                         if let Err(error) = ingest_session_diff(&store, &client, source, &data).await {
                             warn!(%error, "traitement du diff de session échoué, ignoré");
                         }
                     }
-                    GossipMessageReceived { topic, data, source } if topic == WORKSPACE_SYNC_TOPIC => {
+                    PubSubReceived { topic, data, source } if topic == WORKSPACE_SYNC_TOPIC => {
                         if let Err(error) = ingest_workspace_diff(&workspace_store, &client, source, &data).await {
                             warn!(%error, "traitement du diff de workspace échoué, ignoré");
                         }
@@ -122,7 +122,7 @@ pub async fn start_persistency(
                     | WorkerPeerDiscovered { .. }
                     | PersistencyPeerDiscovered { .. }
                     | PeerDisconnected { .. }
-                    | GossipMessageReceived { .. } => {}
+                    | PubSubReceived { .. } => {}
                 }
             }
             result = shutdown.changed(), if !shutdown_gone => {
