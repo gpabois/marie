@@ -10,11 +10,12 @@ pub mod mode;
 pub mod secret;
 pub mod network;
 pub mod job;
-pub mod persistency;
-pub mod node;
 pub mod workspace;
 pub mod rpc;
 pub mod sink;
 pub mod layer;
+pub mod pubsub;
+pub mod node;
+pub mod persistency;
 
 pub use node::{Marie, MarieConfig, MarieHandle, NodeRole};

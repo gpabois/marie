@@ -1,3 +1,4 @@
+/* 
 use std::sync::Arc;
 
 use anyhow::bail;
@@ -239,3 +240,4 @@ async fn ingest_workspace_diff(store: &Arc<dyn WorkspaceStore>, client: &Network
     store.put(&message.workspace_id, &workspace).await?;
     Ok(())
 }
+*/

@@ -22,12 +22,10 @@ use crate::{
     model::{ModelClient, catalog::store::ModelStore},
     network::{
         actor::{NetworkActor, NetworkService},
-        cp::{self, log_store::RaftLogBackend},
         persistency as persistency_role,
         peer::NodeKind,
         start_swarm, worker,
     },
-    persistency::{SessionStore, WorkspaceStore, vfs::WorkspaceVfs},
     secret::{SecretKey, SecretManager},
     session::client::SessionClient,
     tools::{catalog::store::ToolStore, client::ToolClient},
@@ -74,8 +72,7 @@ pub enum NodeRole {
     ///
     /// `state_graph_store` : équivalent de `model_store` pour le catalogue
     /// de graphes d'états (voir `mode::state_graph::catalog::store`).
-    ControlPlane {
-        raft_log_backend: Arc<dyn RaftLogBackend>,
+    Structure {
         model_store: Arc<dyn ModelStore>,
         tool_store: Arc<dyn ToolStore>,
         expert_store: Arc<dyn ExpertStore>,
@@ -95,18 +92,6 @@ pub enum NodeRole {
     /// cloner, mutation intérieure) pour y enregistrer de nouvelles
     /// fonctions à tout moment.
     Worker { pool: PgPool, store: Arc<dyn ObjectStore>, rust_registry: RustRegistry },
-    /// `store` : détenteur durable du contenu CRDT des sessions.
-    ///
-    /// `workspace_store` : équivalent de `store` pour le contenu CRDT des
-    /// workspaces (voir `persistency::WorkspaceStore` et
-    /// `network::cp::workspace_holders_for`, qui suppose ce nœud capable d'y
-    /// répondre en dernier recours).
-    ///
-    /// `pool`/`object_store` : mêmes backends que `Worker::pool`/`Worker::store`
-    /// — nécessaires pour purger `/session/files` d'une session supprimée
-    /// (voir `network::persistency::start_persistency` et
-    /// `RpcCall::DELETE_SESSION`).
-    Persistency { store: Arc<dyn SessionStore>, workspace_store: Arc<dyn WorkspaceStore>, pool: PgPool, object_store: Arc<dyn ObjectStore> },
 }
 
 /// Poignée de supervision d'un nœud démarré par [`Marie`]. L'abandonner
@@ -180,8 +165,6 @@ pub struct Marie {
     /// de vie d'un emprunt de `&self`.
     network: Arc<OnceLock<NetworkService>>,
 
-    /// Service dédié à relayer les appels à procédures distants
-    rpc_relay: RpcRelayService,
     /// Servicé dédié à faire des appels à procédure distants (RPC)
     rpc_client: Arc<OnceLock<RpcClientService>>,
     /// Service dédié à servir des RPC
@@ -220,7 +203,6 @@ impl Marie {
     pub fn new(config: MarieConfig) -> Self {
         Self {
             secret: Arc::new(SecretManager::new(&config.master_key)),
-            rpc_relay: RpcRelayService::default(),
             rpc_client: Arc::new(OnceLock::new()),
             rpc_server: Arc::new(OnceLock::new()),
             network: Arc::new(OnceLock::new()),

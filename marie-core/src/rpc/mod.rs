@@ -1,12 +1,14 @@
 pub mod client;
 pub mod router;
 pub mod server;
+pub mod register;
+pub mod layers;
 
 use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::{id::ID, layer::{IntoService, Layer}};
+use crate::{id::ID, layer::{IntoService, Layer}, rpc::register::RpcRegistry};
 
 pub use server::{RpcServerActor, RpcServerService};
 pub use client::{RpcClientActor, RpcClientService};
@@ -119,11 +121,11 @@ impl<'de> Deserialize<'de> for Void {
 
 
 impl<T> IntoService<RpcClientService> for T where T: Layer<Send=RpcMessage, Received=RpcMessage>{
-    type Args = ();
+    type Args = RpcRegistry;
 
-    fn into_service(self, _: Self::Args) -> RpcClientService {
+    fn into_service(self, registry: Self::Args) -> RpcClientService {
         let actor = RpcClientActor::default();
-        actor.run(self)
+        actor.run(self, registry)
     }
 }
 

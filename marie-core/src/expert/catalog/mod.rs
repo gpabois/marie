@@ -4,7 +4,7 @@ use std::{collections::HashMap, ops::Deref};
 
 use serde::{Deserialize, Serialize};
 
-use crate::expert::declaration::ExpertDeclaration;
+use crate::expert::declaration::Expert;
 
 pub use crate::expert::declaration::ExpertId;
 
@@ -15,10 +15,10 @@ pub use crate::expert::declaration::ExpertId;
 /// `network::cp::state::apply_request` sur des commandes déjà committées par
 /// le cluster — jamais directement.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct ExpertCatalog(HashMap<ExpertId, ExpertDeclaration>);
+pub struct ExpertCatalog(HashMap<ExpertId, Expert>);
 
 impl Deref for ExpertCatalog {
-    type Target = HashMap<ExpertId, ExpertDeclaration>;
+    type Target = HashMap<ExpertId, Expert>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -26,11 +26,11 @@ impl Deref for ExpertCatalog {
 }
 
 impl ExpertCatalog {
-    pub fn insert(&mut self, id: ExpertId, declaration: ExpertDeclaration) -> Option<ExpertDeclaration> {
+    pub fn insert(&mut self, id: ExpertId, declaration: Expert) -> Option<Expert> {
         self.0.insert(id, declaration)
     }
 
-    pub fn remove(&mut self, id: &ExpertId) -> Option<ExpertDeclaration> {
+    pub fn remove(&mut self, id: &ExpertId) -> Option<Expert> {
         self.0.remove(id)
     }
 }

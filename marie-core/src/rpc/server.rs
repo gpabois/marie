@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use futures::{FutureExt as _, SinkExt, future::BoxFuture};
 use futures_util::StreamExt;
+use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::mpsc, task::JoinHandle};
 
@@ -12,7 +13,17 @@ pub struct RpcServerActor {
     executors: HashMap<String, RpcExecutor>
 }
 
-pub struct RpcServerService(mpsc::UnboundedSender<RpcCommand>);
+#[derive(Clone)]
+pub struct RpcServerService {
+    executed: Arc<Mutex<Vec<String>>>,
+    tx: mpsc::UnboundedSender<RpcCommand>
+}
+
+impl RpcServerService {
+    pub fn can_execute(&self) -> Vec<String> {
+        self.executed.lock().clone()
+    }
+}
 
 impl RpcServerService {
     /// Enregistre un RPC au nom donné
@@ -26,8 +37,10 @@ impl RpcServerService {
 
         let name = name.to_string();
         let exe = RpcExecutor::new(f);
+        self.executed.lock().push(name.clone());
+        self.tx.send(Register(name, exe))?;
 
-        self.0.send(Register(name, exe))?;
+
         Ok(())
     } 
 }
@@ -46,7 +59,6 @@ impl RpcServerActor {
         self.executors.insert(name, exe);
     }
 
-
     pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcServerService 
     {
         let (tx, rx) = layer.split();
@@ -56,6 +68,7 @@ impl RpcServerActor {
         let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<RpcEvent>();
 
         let mut executors = self.executors;
+        let executed = executors.iter().map(|(name, _)| name).cloned().collect();
 
         let cmd_tx_out = cmd_tx.clone();
         tokio::spawn(async move {
@@ -144,7 +157,10 @@ impl RpcServerActor {
         });
 
 
-        RpcServerService(cmd_tx.clone())
+        RpcServerService {
+            executed: Arc::new(Mutex::new(executed)),
+            tx: cmd_tx.clone()
+        }
     }
 }
 

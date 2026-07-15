@@ -2,11 +2,10 @@ use libp2p::{StreamProtocol, Swarm, gossipsub, identify, mdns, request_response,
 use serde::{Deserialize, Serialize};
 use tracing::info;
 
-use crate::{job, network::{peer::NodeKind}};
+use crate::network::{peer::NodeKind};
 
 pub mod peer;
 pub mod worker;
-pub mod cp;
 pub mod actor;
 pub mod persistency;
 pub mod rpc;
@@ -22,11 +21,9 @@ pub struct Frame {
 
 #[derive(NetworkBehaviour)]
 pub struct MarieBehaviour {
-    pub worker_gossip: gossipsub::Behaviour,
-    pub node_gossip: gossipsub::Behaviour,
     pub mdns: mdns::tokio::Behaviour,
     pub identify: identify::Behaviour,
-    pub rpc: cp::rpc::Behaviour,
+    pub pub_sub: gossipsub::Behaviour,
     pub oneway: request_response::json::Behaviour<Frame, ()>
 }
 
@@ -42,25 +39,16 @@ pub async fn start_swarm<Init: Fn(&mut MarieSwarm)>(kind: NodeKind, init: Init) 
                 .with_agent_version(format!("marie/{}/1.0.0", kind));
             let identify = identify::Behaviour::new(id_config);
             
-            let worker_gossip = gossipsub::Behaviour::new(
+            let pub_sub = gossipsub::Behaviour::new(
                 gossipsub::MessageAuthenticity::Signed(key.clone()), gossipsub::Config::default()
             ).unwrap();
-            
-            let node_gossip = gossipsub::Behaviour::new(
-                gossipsub::MessageAuthenticity::Signed(key.clone()), gossipsub::Config::default()
-            ).unwrap();
-
-            let cp_rpc = request_response::json::Behaviour::new([
-                (StreamProtocol::new("/marie/control-plane/1.0.0"), request_response::ProtocolSupport::Full)
-                ], request_response::Config::default()
-            );
 
             let oneway = request_response::json::Behaviour::new([
                 (StreamProtocol::new("/marie/one-way/1.0.0"), request_response::ProtocolSupport::Full)
                 ], request_response::Config::default()
             );
 
-            MarieBehaviour { mdns, identify, worker_gossip, rpc: cp_rpc, node_gossip, oneway }
+            MarieBehaviour { mdns, identify, pub_sub, oneway }
         })?
         .build();
 

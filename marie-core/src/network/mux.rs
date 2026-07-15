@@ -16,10 +16,8 @@ impl Layer for FrameLayer {
     }
 }
 
-impl<T> LayerChain<T> for FrameLayer where T: Layer<Send=NetworkCommand, Received=NetworkEvent> {
-    type Args = ();
-
-    fn chain(layer: T, args: Self::Args) -> Self {
+impl<T> LayerChain<T, ()> for FrameLayer where T: Layer<Send=NetworkCommand, Received=NetworkEvent> {
+    fn chain(layer: T, _: ()) -> Self {
         Self::new(layer)
     }
 }

@@ -3,6 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::id::ID;
 use crate::model::declaration::ModelId;
 use crate::tools::declaration::ToolId;
 
@@ -53,7 +54,8 @@ impl Borrow<str> for ExpertId {
 /// et tools que par identifiant : leur résolution (existence, contenu actuel)
 /// se fait au moment de l'utilisation, pas à la déclaration de l'expert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct ExpertDeclaration {
+pub struct Expert {
+    pub id: ID,
     pub prompt: String,
     pub model_id: ModelId,
     pub allowed_tools: Vec<ToolId>,

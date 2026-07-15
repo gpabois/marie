@@ -4,7 +4,7 @@ use sqlx::postgres::PgRow;
 use sqlx::types::Json;
 
 use crate::{
-    expert::{catalog::ExpertId, declaration::ExpertDeclaration},
+    expert::{catalog::ExpertId, declaration::Expert},
     model::catalog::ModelId,
     persistency::{PostgresStore, RedbStore},
     tools::catalog::ToolId,
@@ -22,7 +22,7 @@ const NAMESPACE: &str = "expert";
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredExpert {
     pub id: ExpertId,
-    pub declaration: ExpertDeclaration,
+    pub declaration: Expert,
 }
 
 /// Encodage local (`RedbStore`) d'une entrée du catalogue : `redb` n'a pas de
@@ -44,7 +44,8 @@ fn decode(bytes: &[u8]) -> anyhow::Result<StoredExpert> {
 /// `migrations/0007_expert.sql`) — symétrique de l'insertion dans
 /// [`PostgresStore::put`].
 fn decode_row(row: &PgRow) -> anyhow::Result<StoredExpert> {
-    let declaration = ExpertDeclaration {
+    let declaration = Expert {
+        id: row.try_get::<String, _>("id")?.parse()?,
         prompt: row.try_get("prompt")?,
         model_id: ModelId::new(row.try_get::<String, _>("model_id")?),
         allowed_tools: row.try_get::<Json<Vec<ToolId>>, _>("allowed_tools")?.0,

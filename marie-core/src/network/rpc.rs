@@ -18,10 +18,9 @@ impl Layer for RpcMuxLayer {
 }
 
 
-impl<T> LayerChain<T> for RpcMuxLayer where T: Layer<Received = Frame, Send = Frame> {
-    type Args = ();
+impl<T> LayerChain<T, ()> for RpcMuxLayer where T: Layer<Received = Frame, Send = Frame> {
 
-    fn chain(layer: T, _: Self::Args) -> Self {
+    fn chain(layer: T, _: ()) -> Self {
         Self::new(layer)
     }
 }

@@ -3,9 +3,10 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use futures::{SinkExt as _, StreamExt};
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::{mpsc, oneshot}};
+use tracing::warn;
 use typed_builder::TypedBuilder;
 
-use crate::{id::IdGenerator, layer::Layer, rpc::{RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
+use crate::{id::IdGenerator, layer::Layer, rpc::{RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult, register::RpcRegistry}};
 
 struct RpcHandler {
     sent_at: std::time::Instant,
@@ -14,7 +15,6 @@ struct RpcHandler {
 
 #[derive(Default)]
 pub struct RpcClientActor;
-
 
 struct RpcRequest {
     id: RpcCallId,
@@ -34,7 +34,7 @@ enum RpcEvent {
 }
 
 impl RpcClientActor {
-    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcClientService 
+    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>, registry: RpcRegistry) -> RpcClientService 
     {   
         let (tx, rx) = layer.split();
         let mut outcoming = Box::pin(tx);
@@ -46,12 +46,30 @@ impl RpcClientActor {
 
         let ev_tx_1 = ev_tx.clone();
         let outcoming_task = tokio::spawn(async move {
+            use RpcMessage::Call;
+
             loop {
                 select! {
                     Some(call) = out_rx.recv() => {
                         let id = call.id;
+                        let destination = registry.find_best_candidate(&call.name);
+
+                        if destination.is_none() {
+                            warn!("no RPC server found to execute {}", call.name);
+                            let reply = RpcReply {
+                                id,
+                                destination: None,
+                                source: None,
+                                result: RpcResult::Error(RpcError::NoExecutorFound)
+                            };
+                            
+                            let _ = ev_tx_1.send(RpcEvent::OnReply(reply));
+                            continue;
+                        }
+
+                        let id = call.id;
                         
-                        match outcoming.send(RpcMessage::Call(call)).await {
+                        match outcoming.send(Call(call)).await {
                             Err(_) => {
                                 let reply = RpcReply {
                                     id,
