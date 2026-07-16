@@ -1,13 +1,27 @@
-use std::borrow::Borrow;
+use std::{borrow::Borrow, ops::Deref};
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::secret::EncryptedSecret;
+use crate::secret::{Encryptable, EncryptedSecret, SecretCodec, SecretResult};
 
 /// Identifiant unique d'un modèle dans le [`ModelCatalog`](crate::model::catalog::ModelCatalog).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ModelId(String);
+
+impl AsRef<[u8]> for ModelId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl Deref for ModelId {
+    type Target = str;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.as_str()
+    }
+}
 
 impl ModelId {
     pub fn new(id: impl Into<String>) -> Self {
@@ -62,39 +76,30 @@ pub enum Model {
     },
 }
 
+impl Encryptable for Model {
+    type Encrypted = EncryptedModel;
+
+    fn encrypt<C>(self, codec: &C) -> SecretResult<Self::Encrypted> where C: SecretCodec {
+        Ok(match self {
+            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, api_key } => {
+                EncryptedModel::OpenAICompatible { id, base_url, client_id, api_key: codec.encrypt_str(api_key)?, model, system_prompt }
+            }
+        })
+    }
+
+    fn decrypt<C>(encrypted: Self::Encrypted, codec: &C) -> crate::secret::SecretResult<Self> where C: crate::secret::SecretCodec {
+        Ok(match encrypted {
+            EncryptedModel::OpenAICompatible { id, base_url, client_id, api_key, model, system_prompt } => {
+                Model::OpenAICompatible { id, base_url, client_id, api_key: codec.decrypt_str(api_key)?, model, system_prompt }
+            },
+        })
+    }
+}
+
 impl Model {
     pub fn id(&self) -> &str {
         match self {
             Model::OpenAICompatible { id, .. } => id.as_str(),
-        }
-    }
-    /// Clé API en clair de ce modèle — jamais transmise ni persistée telle
-    /// quelle, voir [`Self::encrypt`].
-    #[must_use]
-    pub fn api_key(&self) -> &str {
-        match self {
-            Self::OpenAICompatible { api_key, .. } => api_key,
-        }
-    }
-
-    /// Produit la représentation chiffrée de cette déclaration, destinée à
-    /// transiter sur le réseau (voir [`RpcCall::GET_MODEL`](crate::network::cp::rpc::RpcCall::GET_MODEL))
-    /// ou à être persistée au repos (voir `model::catalog::store`) :
-    /// `api_key` doit déjà avoir été chiffrée pour le destinataire (voir
-    /// `SecretManager::encrypt_api_key`), jamais en clair.
-    #[must_use]
-    pub fn encrypt(&self, api_key: EncryptedSecret) -> EncryptedModel {
-        match self {
-            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, .. } => {
-                EncryptedModel::OpenAICompatible {
-                    id: id.clone(),
-                    base_url: base_url.clone(),
-                    client_id: client_id.clone(),
-                    api_key,
-                    model: model.clone(),
-                    system_prompt: system_prompt.clone(),
-                }
-            }
         }
     }
 }

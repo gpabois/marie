@@ -7,6 +7,12 @@ use crate::agent::role::Role;
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct Context(Vec<ContextEntry>);
 
+impl ToString for Context {
+    fn to_string(&self) -> String {
+        self.0.iter().map(ToString::to_string).collect()
+    }
+}
+
 impl Deref for Context {
     type Target = [ContextEntry];
 
@@ -32,4 +38,10 @@ impl From<Vec<ContextEntry>> for Context {
 pub struct ContextEntry {
     pub role: Role,
     pub content: String
+}
+
+impl ToString for ContextEntry {
+    fn to_string(&self) -> String {
+        self.content.clone()
+    }
 }

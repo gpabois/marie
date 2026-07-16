@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::Arc};
 
 use futures::{FutureExt as _, SinkExt, future::BoxFuture};
 use futures_util::StreamExt;
+use libp2p::PeerId;
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::mpsc, task::JoinHandle};
@@ -27,9 +28,10 @@ impl RpcServer {
 
 impl RpcServer {
     /// Enregistre un RPC au nom donné
-    pub fn register<F, Args, R>(&mut self, name: impl ToString, f: F) -> Result<(), anyhow::Error>
+    pub fn register<F, Args, R, Fut>(&mut self, name: impl ToString, f: F) -> Result<(), anyhow::Error>
         where 
-            F: Fn(Args) -> BoxFuture<'static, R> + Send + Sync + 'static, 
+            F: Fn(Args, PeerId) -> Fut + Send + Sync + 'static, 
+            Fut: Future<Output = R> + Send + 'static,
             Args: DeserializeOwned, 
             R: Serialize + 'static
     {
@@ -49,7 +51,7 @@ impl RpcServerActor {
     /// Enregistre un RPC au nom donné
     pub fn register<F, Args, R>(&mut self, name: impl ToString, f: F) 
         where 
-            F: Fn(Args) -> BoxFuture<'static, R> + Send + Sync + 'static, 
+            F: Fn(Args, PeerId) -> BoxFuture<'static, R> + Send + Sync + 'static, 
             Args: DeserializeOwned, 
             R: Serialize + 'static
     {
@@ -105,7 +107,7 @@ impl RpcServerActor {
                                 // si la tâche existe déjà, on la laisse tourner.
                                 if let Some(info) = ongoings.get(&call.id) && info.handle.is_some() { continue }
                                 if let Some(executor) = executors.get(&call.name).cloned() {
-                                    let task = executor.execute(call.args.clone());
+                                    let task = executor.execute(call.args.clone(), call.source.unwrap());
                                     let ev_tx_h = ev_tx.clone();
                                     
                                     let call_2 = call.clone();
@@ -183,18 +185,19 @@ enum RpcEvent {
 
 #[derive(Clone)]
 /// Remote procedure call executor
-struct RpcExecutor(Arc<dyn Fn(serde_json::Value) -> BoxFuture<'static, serde_json::Value> + Send + Sync>);
+struct RpcExecutor(Arc<dyn Fn(serde_json::Value, PeerId) -> BoxFuture<'static, serde_json::Value> + Send + Sync>);
 
 impl RpcExecutor {
-    pub fn new<F, Args, R>(f: F) -> Self
+    pub fn new<F, Args, R, Fut>(f: F) -> Self
         where 
-            F: Fn(Args) -> BoxFuture<'static, R> + Sync + Send + 'static, 
+            F: Fn(Args, PeerId) -> Fut + Sync + Send + 'static, 
+            Fut: Future<Output = R> + Send + 'static,
             Args: DeserializeOwned, 
             R: Serialize + 'static
     {
-        let func = move |args: serde_json::Value| {
+        let func = move |args: serde_json::Value, source: PeerId| {
             let args: Args = serde_json::from_value(args).unwrap();
-            let fut = f(args);
+            let fut = f(args, source);
 
             async move {
                 let ret = fut.await;
@@ -208,7 +211,7 @@ impl RpcExecutor {
     }
 
     #[inline]
-    pub fn execute(&self, args: serde_json::Value) -> BoxFuture<'static, serde_json::Value> {
-        (&self.0)(args)
+    pub fn execute(&self, args: serde_json::Value, source: PeerId) -> BoxFuture<'static, serde_json::Value> {
+        (&self.0)(args, source)
     }
 }

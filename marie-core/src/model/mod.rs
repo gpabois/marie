@@ -1,18 +1,31 @@
 
 use async_openai::{Client, config::OpenAIConfig, error::OpenAIError, types::responses::{CreateResponseArgs, FunctionTool, OutputItem, Tool}};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use typed_builder::TypedBuilder;
 
-use crate::{model::catalog::ModelId, rpc::RpcError, tools::{ToolCall, ToolSignature}};
+use crate::{agent::Context, model::catalog::ModelId, rpc::RpcError, secret::SecretError, tools::{ToolCall, ToolSignature}};
 
 pub mod catalog;
 pub mod model;
 pub mod client;
+pub mod server;
 
 pub use model::{Model, EncryptedModel};
 
+pub const RPC_MODEL_INSERT: &str = "/marie/models/insert";
+pub const RPC_MODEL_UPDATE: &str = "/marie/models/update";
+pub const RPC_MODEL_REMOVE: &str = "/marie/models/remove";
+pub const RPC_MODEL_GET: &str = "/marie/models/get";
+pub const RPC_MODEL_LIST: &str = "/marie/models/list";
+pub const RPC_MODEL_RUN: &str = "/marie/models/run";
+pub const NS_MODEL: &str = "/marie/ns/models";
+
+
 #[derive(Debug, Error)]
 pub enum ModelError {
+    #[error("aucun catalogue de modèles n'est disponible")]
+    NoCatalogAvailable,
     #[error("échec de la requête : {0}")]
     OpenAIError(#[from] OpenAIError),
     #[error("échec lors de la réponse: {message} (code: {code})")]
@@ -24,15 +37,26 @@ pub enum ModelError {
     UnknownModel(ModelId),
     #[error("[Model] échec de l'appel distant : {0}")]
     RpcError(#[from] RpcError),
+    #[error("erreur lors des opérations de chiffrement/déchiffrement: {0}")]
+    SecretError(#[from] SecretError),
+    #[error("{0}")]
+    Custom(String)
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct ModelResponse {
     pub text: Option<String>,
     pub tool_calls: Vec<ToolCall>
 }
 
-pub async fn execute(decl: Model, tools: &[ToolSignature], input: impl Into<String>) -> Result<ModelResponse, ModelError> {
+#[derive(TypedBuilder, Serialize, Deserialize)]
+pub struct RunModelArgs {
+    pub model_id: ModelId,
+    pub tools: Vec<ToolSignature>,
+    pub context: Context
+}
+
+pub async fn execute(decl: Model, tools: &[ToolSignature], input: impl ToString) -> Result<ModelResponse, ModelError> {
     let Model::OpenAICompatible { base_url, client_id, api_key, model, system_prompt, .. } = decl;
 
     let config = OpenAIConfig::new()
@@ -45,7 +69,7 @@ pub async fn execute(decl: Model, tools: &[ToolSignature], input: impl Into<Stri
     let mut request = CreateResponseArgs::default();
     request
         .model(model)
-        .input(input.into())
+        .input(input.to_string())
         .tools(tools.iter().cloned().map(|sig| Tool::Function(FunctionTool {
             name: sig.name,
             description: Some(sig.description),

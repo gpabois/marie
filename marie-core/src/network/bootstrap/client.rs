@@ -12,6 +12,7 @@ pub struct BootstrapClientActor {
 }
 
 
+#[derive(Clone)]
 pub struct BootstrapClient(PeerId, Arc<Mutex<HashMap<String, Vec<PeerId>>>>);
 
 impl BootstrapClient {

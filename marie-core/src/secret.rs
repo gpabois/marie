@@ -15,6 +15,30 @@ pub type SecretKey = [u8; 32];
 
 type HmacSha256 = Hmac<Sha256>;
 
+pub trait Encryptable : Sized {
+    type Encrypted;
+
+    fn encrypt<C>(self, codec: &C) -> SecretResult<Self::Encrypted> where C: SecretCodec;
+    fn decrypt<C>(encrypted: Self::Encrypted, codec: &C) -> SecretResult<Self> where C: SecretCodec;
+}
+
+
+pub trait SecretCodec {
+    fn encrypt(&self, key: impl AsRef<[u8]>) -> SecretResult<EncryptedSecret>;
+    fn decrypt(&self, encrypted: EncryptedSecret) -> SecretResult<Vec<u8>>;
+
+    fn encrypt_str(&self, key: impl ToString) -> SecretResult<EncryptedSecret> {
+        let key = key.to_string();
+        self.encrypt(key)
+    }
+
+    fn decrypt_str(&self, encrypted: EncryptedSecret) -> SecretResult<String> {
+        self
+        .decrypt(encrypted)
+        .and_then(|bytes| String::from_utf8(bytes).map_err(SecretError::Utf8DecodingFailed))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum SecretError {
     #[error("HKDF expand failed: {0}")]
@@ -33,6 +57,38 @@ pub enum SecretError {
 pub struct PeerSecretManager {
     global: SecretManager,
     peer_key: [u8; 32]
+}
+
+impl SecretCodec for PeerSecretManager {
+    fn encrypt(&self, secret: impl AsRef<[u8]>) -> SecretResult<EncryptedSecret> {
+        use SecretError::EncryptionFailed;
+
+        let cipher = ChaCha20Poly1305::new(&self.peer_key.into());
+        let nonce = ChaCha20Poly1305::generate_nonce(&mut rand::thread_rng());
+        
+        let ciphertext = cipher
+            .encrypt(&nonce, secret.as_ref())
+            .map_err(EncryptionFailed)?;
+        
+        Ok(EncryptedSecret {
+            ciphertext,
+            nonce: nonce.to_vec(),
+            algorithm: "ChaCha20-Poly1305".to_string(),
+        })
+    }
+
+    fn decrypt(&self, encrypted_secret: EncryptedSecret) -> SecretResult<Vec<u8>> {
+        pub use SecretError::{DecryptionFailed};
+
+        let cipher = ChaCha20Poly1305::new(&self.peer_key.into());
+        let nonce = Nonce::from_slice(&encrypted_secret.nonce);
+        
+        let plaintext = cipher
+            .decrypt(nonce, encrypted_secret.ciphertext.as_ref())
+            .map_err(DecryptionFailed)?;
+        
+        Ok(plaintext)      
+    }
 }
 
 impl PeerSecretManager {

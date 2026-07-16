@@ -1,6 +1,4 @@
-use serde::{Deserialize, Serialize};
-use crate::id::ID;
-
+/* 
 use crate::{
     agent::{context::{Context, ContextEntry}, frame::AgentFrame, role::Role, status::{AgentStatus, YieldStatus}},
     hitl::{ASK_HUMAN_TOOL, Question, client::HitlClient},
@@ -8,12 +6,16 @@ use crate::{
     session::client::SessionClient,
     tools::{ToolCall, client::ToolClient},
 };
+*/
+
+pub use context::Context;
 
 pub mod status;
 pub mod frame;
 pub mod context;
 pub mod role;
 
+/* 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GlobalAgentId(ID, ID);
 
@@ -209,3 +211,4 @@ mod tests {
         assert!(parse_ask_human_questions(&call).is_err());
     }
 }
+*/

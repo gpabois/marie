@@ -1,4 +1,4 @@
-//pub mod agent;
+pub mod agent;
 pub mod id;
 pub mod tools;
 //pub mod session;

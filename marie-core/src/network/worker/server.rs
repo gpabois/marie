@@ -64,7 +64,7 @@ impl WorkerServerActor {
         let job_context_builder = args.job_context_builder;
 
         // enregistre la fonction execute
-        args.rpc_server.register(RPC_EXECUTE_JOB, move |job: Job| {
+        args.rpc_server.register(RPC_EXECUTE_JOB, move |job: Job, _| {
             let Some(executor) = execs.lock().get(&job.name).cloned() else {
                 return std::future::ready(Err("aucun exécuteur pour le travail n'a été trouvé")).boxed();
             };

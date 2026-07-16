@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
-use crate::{job::JobId, layer::{IntoService as _, LayerExt as _}, model::ModelClient, network::{actor::NetworkActor, bootstrap::BootstrapClientActor, create_swarm, mux::FrameLayer, rpc::RpcMuxLayer, worker::{layers::WorkerEventLayer, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}}}, pubsub::layer::PubSubLayer, rpc::{RpcClient, RpcError, RpcServer, RpcServerActor}, secret::{SecretKey, SecretManager}};
+use crate::{job::JobId, layer::{IntoService as _, LayerExt as _}, model::client::ModelClient, network::{actor::NetworkActor, bootstrap::BootstrapClientActor, create_swarm, mux::FrameLayer, rpc::RpcMuxLayer, worker::{layers::WorkerEventLayer, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}}}, pubsub::layer::PubSubLayer, rpc::{RpcClient, RpcError, RpcServer, RpcServerActor}, secret::{SecretKey, SecretManager}};
 
 pub mod info;
 pub mod client;
@@ -117,8 +117,6 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
         .into_service(());
 
     
-    let model_client = ModelClient::new(rpc_client.clone(), secret_mngr.for_peer(local_peer_id));
-
     let worker_args = WorkerServerArgs::builder()
         .rpc_server(rpc_server)
         .job_context_builder(move |job| ())
@@ -129,9 +127,6 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
         .chain::<WorkerEventLayer, _>(())
         .into_service(worker_args);
 
-    worker_server.register_job_executor("marie/model/run", |cx, args: Model| {
-
-    });
 
     net.listen();
 
