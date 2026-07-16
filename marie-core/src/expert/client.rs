@@ -1,7 +1,7 @@
 use thiserror::Error;
 
 use crate::{
-    expert::{catalog::ExpertId, declaration::Expert}, rpc::{RpcClientService, RpcError, Void, client::RpcCallArgs},
+    expert::{catalog::ExpertId, declaration::Expert}, rpc::{RpcClient, RpcError, Void, client::RpcCallArgs},
 };
 
 #[derive(Debug, Error)]
@@ -14,11 +14,11 @@ pub enum ExpertError {
 
 /// Point d'entrée pour le CRUD du catalogue d'experts.
 #[derive(Clone)]
-pub struct ExpertClient(RpcClientService);
+pub struct ExpertClient(RpcClient);
 
 impl ExpertClient {
     #[must_use]
-    pub fn new(client: RpcClientService) -> Self {
+    pub fn new(client: RpcClient) -> Self {
         Self(client)
     }
 

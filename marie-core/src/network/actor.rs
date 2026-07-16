@@ -1,5 +1,6 @@
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
+use libp2p::rendezvous::{self, Namespace, Ttl};
 use libp2p::{gossipsub, identify, mdns, request_response};
 use libp2p::{PeerId, swarm::SwarmEvent};
 use tokio::{select, sync::{broadcast, mpsc}};
@@ -7,18 +8,26 @@ use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
 
 use crate::layer::Layer;
-use crate::network::Frame;
+use crate::network::mux::Frame;
+use crate::network::peer::NodeKind;
 use crate::{
     network::MarieSwarm,
-    secret::SecretManager,
 };
 
 pub enum NetworkCommand {
+    Listen,
     SendFrame(Frame),
     Subscribe(gossipsub::IdentTopic),
     Publish {
         topic: gossipsub::IdentTopic,
         payload: Vec<u8>
+    },
+    /// Enregistre le pair dans un espace de nom
+    /// auprès du serveur bootstrap
+    RegisterPeer {
+        namespaces: Vec<Namespace>,
+        bootstrap_peer_id: PeerId,
+        ttl: Option<Ttl>
     },
     Shutdown,
 }
@@ -27,10 +36,19 @@ pub enum NetworkCommand {
 #[derive(Clone)]
 pub enum NetworkEvent {
     ReceivedFrame(Frame),
+    BootstrapDiscovered {
+        peer_id: PeerId
+    },
+    NamespacePeerRegistred {
+        namespace: Namespace,
+        peer_id: PeerId,
+        ttl: Ttl
+    },
     PeerDisconnected {
         peer_id: PeerId,
     },
     PubSubReceived {
+        id: String,
         topic: String,
         data: Vec<u8>,
         source: PeerId,
@@ -80,7 +98,7 @@ pub struct NetworkSender(mpsc::UnboundedSender<NetworkCommand>);
 impl Sink<NetworkCommand> for NetworkSender {
     type Error = anyhow::Error;
 
-    fn poll_ready(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_ready(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         std::task::Poll::Ready(Ok(()))
     }
 
@@ -89,11 +107,11 @@ impl Sink<NetworkCommand> for NetworkSender {
         Ok(())
     }
 
-    fn poll_flush(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_flush(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         std::task::Poll::Ready(Ok(()))
     }
 
-    fn poll_close(self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
+    fn poll_close(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
        std::task::Poll::Ready(Ok(()))
     }
 }
@@ -134,6 +152,11 @@ impl NetworkService {
         NetworkLayer(sender, receiver)
     }
 
+    /// Connecte le noeud au réseau
+    pub fn listen(&self) {
+        self.commands.send(NetworkCommand::Listen);
+    }
+
     /// S'abonne à un topic gossipsub (`node_gossip`) : les messages publiés
     /// dessus par d'autres nœuds abonnés remonteront via
     /// `NetworkEvent::GossipMessageReceived`.
@@ -155,6 +178,7 @@ impl NetworkService {
     }
 }
 pub struct NetworkActor {
+    kind: NodeKind,
     swarm: MarieSwarm,
     // Diffusion des `NetworkEvent` (voir `NetworkClient::subscribe_events`)
     events_tx: broadcast::Sender<NetworkEvent>,
@@ -165,10 +189,11 @@ pub struct NetworkActor {
 
 impl NetworkActor {
     #[must_use]
-    pub fn new(swarm: MarieSwarm, secret: SecretManager) -> (Self, NetworkService) {
+    pub fn new(swarm: MarieSwarm, kind: NodeKind) -> NetworkService {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
         let local_peer_id = *swarm.local_peer_id();
+
 
         let client = NetworkService {
             commands: commands_tx.clone(),
@@ -176,32 +201,43 @@ impl NetworkActor {
             local_peer_id,
         };
 
+
+
         let actor = NetworkActor {
+            kind,
             swarm,
             events_tx,
             commands_rx,
             commands_tx,
         };
 
-        (actor, client)
+        tokio::spawn(actor.run());
+
+        client
     }
 
-    pub async fn run(mut self) {
+    async fn run(mut self) -> Result<(), anyhow::Error> {
+
         use NetworkCommand::*;
         use SwarmEvent::Behaviour;
         use request_response::Event as ReqResEvent;
         use identify::Event as IdEvent;
-        use super::MarieBehaviourEvent::{PubSub, Identify, Mdns, Oneway};
+        use super::MarieBehaviourEvent::{PubSub, Identify, Mdns, Oneway, Rendezvous};
+
 
         loop {
             select! {
                 Some(cmd) = self.commands_rx.recv() => {
                     match cmd {
+                        Listen => {
+                            self.swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
+                            info!("📡 Swarm [{}] initialisé. PeerID: {}", self.kind, self.swarm.local_peer_id());
+                        }
                         SendFrame(mut frame) => {
                             // Le frame n'a pas de source, on va l'ajouter.
                             // Le frame peut comporter une source notamment dans un cas de forward.
                             if frame.source.is_none() {
-                                frame.source = Some(serde_json::to_value(self.swarm.local_peer_id()).unwrap());
+                                frame.source = Some(*self.swarm.local_peer_id());
                             }
                             
                             // on a pas de destinataire, c'est plus compliqué.
@@ -210,8 +246,7 @@ impl NetworkActor {
                                 continue;
                             };
 
-                            let peer_id: PeerId = serde_json::from_value(dest).unwrap();
-                            self.swarm.behaviour_mut().oneway.send_request(&peer_id, frame);
+                            self.swarm.behaviour_mut().oneway.send_request(&dest, frame);
                         },
                         Subscribe(topic) => {
                             if let Err(error) = self.swarm.behaviour_mut().pub_sub.subscribe(&topic) {
@@ -223,6 +258,14 @@ impl NetworkActor {
                                 warn!(%error, %topic, "publication gossip échouée");
                             }                            
                         },
+                        RegisterPeer { namespaces, bootstrap_peer_id, ttl } => {
+                            for namespace in namespaces {
+                                if let Err(error) = self.swarm.behaviour_mut().rendezvous.register(namespace, bootstrap_peer_id, ttl) {
+                                    warn!(%error, "échec de l'enregistrement auprès du serveur bootstrap");
+                                }
+                            }
+
+                        },
                         Shutdown => {
                             info!("arrêt du réseau (swarm libp2p) demandé");
                             break;
@@ -233,14 +276,14 @@ impl NetworkActor {
                 event = self.swarm.select_next_some() => {
                     match event {
                         Behaviour(Oneway(ReqResEvent::Message{peer, message: request_response::Message::Request{request: mut frame, ..}, ..})) => {
-                            let source = serde_json::to_value(&peer).unwrap();
-                            frame.source = Some(source);
+                            frame.source = Some(peer);
                             let _ = self.events_tx.send(NetworkEvent::ReceivedFrame(frame));
                         },
                         Behaviour(PubSub(msg)) => {
                             match msg {
                                 gossipsub::Event::Message { propagation_source, message_id, message } => {
                                     let _ = self.events_tx.send(NetworkEvent::PubSubReceived { 
+                                        id: message_id.to_string(),
                                         topic: message.topic.to_string(), 
                                         data: message.data, 
                                         source: propagation_source 
@@ -249,31 +292,42 @@ impl NetworkActor {
                                 _ => {}
                             }
                         },
-                        // mDNS ne fait que découvrir des pairs (annonce périodique sur le
-                        // réseau local) — il ne les connecte pas lui-même (voir
-                        // `libp2p::mdns::Behaviour`, qui ne produit jamais de
-                        // `ToSwarm::Dial`). Sans ce `dial` explicite, aucune connexion
-                        // libp2p ne s'établirait jamais entre deux nœuds Marie, quel que
-                        // soit leur rôle : ni `identify` (qui dépend d'une connexion
-                        // établie pour s'échanger, voir plus bas) ni `rpc`
-                        // (`request_response`) ne pourraient jamais fonctionner.
                         Behaviour(Mdns(mdns::Event::Discovered(discovered))) => {
-                            for (peer_id, addr) in discovered {
-                                if self.swarm.is_connected(&peer_id) {
-                                    continue;
-                                }
+                            let non_connected = discovered
+                                .into_iter()
+                                .filter(|(peer_id, _addr)| !self.swarm.is_connected(&peer_id))
+                                .collect::<Vec<_>>();
+
+                            for (peer_id, addr) in non_connected {
                                 if let Err(error) = self.swarm.dial(addr.clone()) {
                                     warn!(%peer_id, %addr, %error, "échec de connexion à un pair découvert par mDNS");
                                 }
                             }
                         },
-                        Behaviour(Identify(IdEvent::Received { peer_id, info, .. })) => {
-                            let addr = info.listen_addrs.first().cloned();
+                        Behaviour(Mdns(mdns::Event::Expired(list))) => {
+                            use NetworkEvent::PeerDisconnected;
+                            for (peer_id, addr) in list {
+                                let _ = self.events_tx.send(PeerDisconnected {peer_id});
+                            }
                         },
+                        Behaviour(Identify(IdEvent::Received { peer_id, info, .. })) => {
+                            // On a trouvé le serveur de bootstrap (rendez-vous, etc.)
+                            if info.agent_version.starts_with("/marie/bootstrap") {
+                                use NetworkEvent::BootstrapDiscovered;
+                                let _ = self.events_tx.send(BootstrapDiscovered{peer_id});
+                            }
+                            
+                        },
+                        Behaviour(Rendezvous(rendezvous::client::Event::Discovered {registrations, ..})) => {
+                            for registration in registrations {
+                                let peer_id = registration.record.peer_id();
+                                if peer_id == *self.swarm.local_peer_id() { continue }
 
-                        // Plus aucune connexion établie avec ce pair (`num_established == 0` :
-                        // il pouvait y en avoir plusieurs en parallèle). Signalé au niveau
-                        // applicatif pour retirer ses enregistrements RPC dynamiques.
+                                let ttl = registration.ttl; // ttl in seconds
+                                let namespace = registration.namespace;
+                                let _ = self.events_tx.send(NetworkEvent::NamespacePeerRegistred { peer_id, namespace, ttl });
+                            }
+                        },
                         SwarmEvent::ConnectionClosed { peer_id, num_established: 0, .. } => {
                             use NetworkEvent::PeerDisconnected;
                             let _ = self.events_tx.send(PeerDisconnected { peer_id });
@@ -284,6 +338,7 @@ impl NetworkActor {
 
             }
         }
-    
+        
+        Ok(())
     }
 }

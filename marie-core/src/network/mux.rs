@@ -1,7 +1,20 @@
 use futures::{SinkExt as _, StreamExt, stream::{self, BoxStream}};
+use libp2p::PeerId;
+use serde::{Deserialize, Serialize};
 
-use crate::{layer::{Layer, LayerChain}, network::{Frame, actor::{NetworkCommand, NetworkEvent}}, sink::{BoxSink, SinkBoxExt as _}};
+use crate::{
+    layer::{Layer, LayerChain}, 
+    network::actor::{NetworkCommand, NetworkEvent}, 
+    sink::{BoxSink, SinkBoxExt as _}
+};
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Frame {
+    pub channel: String,
+    pub destination: Option<PeerId>,
+    pub source: Option<PeerId>,
+    pub payload: Vec<u8>
+}
 
 pub struct FrameLayer(BoxSink<'static, Frame, anyhow::Error>, BoxStream<'static, Frame>);
 

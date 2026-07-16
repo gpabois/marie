@@ -1,23 +1,15 @@
-use std::collections::HashMap;
 
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use crate::id::ID;
-use tokio::sync::{mpsc, oneshot};
-
-use crate::agent::{GlobalAgentId, status::YieldStatus};
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum JobKind {
-    RunAgent(GlobalAgentId)
-}
 
 pub type JobId = ID;
 // Diffusé sur Gossipsub par le Control Plane
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Job {
     pub id: ID,
-    pub kind: JobKind,
+    pub name: String,
+    pub args: serde_json::Value
 }
 
 /// Cycle de vie d'un job — volontairement découplé de celui de l'agent qu'il
@@ -40,9 +32,6 @@ pub enum JobState {
     /// directement depuis `jobs` (voir `ControlPlaneState::session_holders`)
     /// sans pointeur séparé.
     Running { worker: PeerId },
-    Completed { result: String },
+    Completed,
     Failed { error: String },
-    /// Le run s'est arrêté sans conclure (voir [`YieldStatus`]) — terminal,
-    /// comme `Completed`/`Failed` : voir la note sur ce type.
-    Yielded { reason: YieldStatus },
 }

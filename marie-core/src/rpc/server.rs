@@ -14,18 +14,18 @@ pub struct RpcServerActor {
 }
 
 #[derive(Clone)]
-pub struct RpcServerService {
+pub struct RpcServer {
     executed: Arc<Mutex<Vec<String>>>,
     tx: mpsc::UnboundedSender<RpcCommand>
 }
 
-impl RpcServerService {
+impl RpcServer {
     pub fn can_execute(&self) -> Vec<String> {
         self.executed.lock().clone()
     }
 }
 
-impl RpcServerService {
+impl RpcServer {
     /// Enregistre un RPC au nom donné
     pub fn register<F, Args, R>(&mut self, name: impl ToString, f: F) -> Result<(), anyhow::Error>
         where 
@@ -59,7 +59,7 @@ impl RpcServerActor {
         self.executors.insert(name, exe);
     }
 
-    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcServerService 
+    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcServer 
     {
         let (tx, rx) = layer.split();
         let mut rx = Box::pin(rx);
@@ -157,7 +157,7 @@ impl RpcServerActor {
         });
 
 
-        RpcServerService {
+        RpcServer {
             executed: Arc::new(Mutex::new(executed)),
             tx: cmd_tx.clone()
         }

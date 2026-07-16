@@ -3,10 +3,9 @@ use std::{collections::HashMap, sync::Arc};
 use futures::{SinkExt as _, StreamExt as _};
 use libp2p::PeerId;
 use parking_lot::Mutex;
-use serde::{Deserialize, Serialize};
 use tokio::{select, sync::mpsc};
 
-use crate::{layer::Layer, rpc::{RpcClientService, RpcServerService}, sink::SinkBoxExt};
+use crate::{id, layer::Layer, rpc::{RpcClient, RpcEvent, RpcEventKind, RpcServer}, sink::SinkBoxExt};
 
 pub struct RpcRegisterActor;
 
@@ -17,14 +16,17 @@ pub struct RpcRegistry{
 
 impl RpcRegistry {
     /// Trouve le meilleur candidat pour exécuter la RPC
-    pub fn find_best_candidate(&self, name: impl ToString) -> Option<PeerId> {
-        let name = &name.to_string();
+    pub fn find_candidates(&self, name: impl ToString) -> Vec<PeerId> {
+        let name = name.to_string();
+
         self.infos.lock()
             .iter()
-            .filter(|(_, infos)| infos.can_execute.contains(name))
+            .filter(move |(_, infos)| {
+                infos.can_execute.contains(&name)
+            })
             .filter(|(_, infos)| infos.status == RpcServerStatus::Alive)
             .map(|(peer_id, _)| *peer_id)
-            .next()
+            .collect()
     }
 
     pub fn can_execute(&self, peer_id: PeerId, names: impl IntoIterator<Item=String>) {
@@ -43,41 +45,16 @@ impl RpcRegistry {
     }
 }
 
-pub struct RpcEvent {
-    pub(crate) source: PeerId,
-    pub(crate) kind: RpcEventKind
-}
-
-impl RpcEvent {
-    pub fn topic(&self) -> String {
-        use RpcEventKind::*;
-
-        match self.kind {
-            Metrics() => String::from("rpc/events/metrics"),
-            Joined {..} => String::from("rpc/events/server/joined"),
-            CanExecute(_) => String::from("rpc/events/server/can-execute"),
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone)]
-pub enum RpcEventKind {
-    Metrics(),
-    CanExecute(Vec<String>),
-    Joined {
-        can_execute: Vec<String>
-    }
-}
 
 pub struct RpcActor;
 
 impl RpcActor {
     pub fn new(
-        layer: impl Layer<Send=RpcEvent, Received = RpcEvent>, 
+        layer: impl Layer<Send=super::RpcEvent, Received = RpcEvent>, 
         local_peer_id: PeerId, 
         registry: RpcRegistry,
-        client: RpcClientService,
-        server: RpcServerService
+        client: RpcClient,
+        server: RpcServer
     ) -> RpcService {
         let (tx, rx) = layer.split();
         let mut tx = tx.boxed_sink();
@@ -85,7 +62,11 @@ impl RpcActor {
 
         let (event_tx, mut event_rx) = mpsc::unbounded_channel::<RpcEvent>();
 
-        let _ = event_tx.send(RpcEvent { source: local_peer_id, kind: RpcEventKind::Joined { can_execute: server.can_execute() } });
+        let _ = event_tx.send(RpcEvent { 
+            id: String::default(),
+            source: local_peer_id, 
+            kind: super::RpcEventKind::Joined { can_execute: server.can_execute() } 
+        });
         
 
         let reg0 = registry.clone();
@@ -137,7 +118,7 @@ pub struct RpcService {
     /// Shared RPC servers info
     registry: RpcRegistry,
     /// The client service
-    client: RpcClientService,
+    client: RpcClient,
     /// The server service
-    server: RpcServerService
+    server: RpcServer
 }

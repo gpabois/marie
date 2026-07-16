@@ -5,7 +5,7 @@ use sqlx::postgres::PgRow;
 use crate::{
     model::{
         catalog::ModelId,
-        declaration::{EncryptedModel, Model},
+        model::{EncryptedModel, Model},
     },
     persistency::{PostgresStore, RedbStore},
     secret::{EncryptedSecret, SecretManager, SecretResult},

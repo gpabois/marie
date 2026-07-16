@@ -9,7 +9,6 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::session::SessionId;
 
 pub type SecretResult<T> = Result<T, SecretError>;
 pub type SecretKey = [u8; 32];
@@ -157,62 +156,6 @@ impl SecretManager {
         Ok(mac.verify_slice(proof).is_ok())
     }
 
-    /// Dérive une clé par session
-    pub fn derive_session_key(
-        &self,
-        node_key: &[u8; 32],
-        session_id: &SessionId
-    ) -> SecretResult<SecretKey> {
-          use SecretError::HkdfExpandFailed;
-
-        let hkdf = Hkdf::<Sha256>::new(None, node_key);
-        let mut key = [0u8; 32];
-        hkdf.expand(session_id.as_bytes(), &mut key)
-            .map_err(HkdfExpandFailed)?;
-
-        Ok(key)
-    }
-    
-    /// Chiffre une clé API pour stockage
-    pub fn encrypt_api_key(
-        &self,
-        api_key: &str,
-        session_key: &[u8; 32],
-    ) -> SecretResult<EncryptedSecret> {
-        pub use SecretError::EncryptionFailed;
-
-        let cipher = ChaCha20Poly1305::new(session_key.into());
-        let nonce = ChaCha20Poly1305::generate_nonce(&mut rand::thread_rng());
-        
-        let ciphertext = cipher
-            .encrypt(&nonce, api_key.as_bytes())
-            .map_err(EncryptionFailed)?;
-        
-        Ok(EncryptedSecret {
-            ciphertext,
-            nonce: nonce.to_vec(),
-            algorithm: "ChaCha20-Poly1305".to_string(),
-        })
-    }
-    
-    /// Déchiffre une clé API (seulement à l'exécution)
-    pub fn decrypt_api_key(
-        &self,
-        encrypted: &EncryptedSecret,
-        session_key: &[u8; 32],
-    ) -> SecretResult<String> {
-        pub use SecretError::{DecryptionFailed, Utf8DecodingFailed};
-
-        let cipher = ChaCha20Poly1305::new(session_key.into());
-        let nonce = Nonce::from_slice(&encrypted.nonce);
-        
-        let plaintext = cipher
-            .decrypt(nonce, encrypted.ciphertext.as_ref())
-            .map_err(DecryptionFailed)?;
-        
-        String::from_utf8(plaintext).map_err(Utf8DecodingFailed)
-    }
-    
     /// Rotation des clés master
     pub fn rotate_master_key(&self, new_key: &[u8; 32]) {
         let mut guard = self.0.lock().unwrap();

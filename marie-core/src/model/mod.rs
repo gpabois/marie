@@ -3,16 +3,13 @@ use async_openai::{Client, config::OpenAIConfig, error::OpenAIError, types::resp
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::{
-    model::declaration::EncryptedModel, 
-    rpc::{RpcClientService, RpcError, Void, client::RpcCallArgs}, 
-    secret::PeerSecretManager
-};
-
-use crate::{model::{catalog::ModelId, declaration::Model}, tools::{ToolCall, ToolSignature}};
+use crate::{model::catalog::ModelId, rpc::RpcError, tools::{ToolCall, ToolSignature}};
 
 pub mod catalog;
-pub mod declaration;
+pub mod model;
+pub mod client;
+
+pub use model::{Model, EncryptedModel};
 
 #[derive(Debug, Error)]
 pub enum ModelError {
@@ -35,93 +32,8 @@ pub struct ModelResponse {
     pub tool_calls: Vec<ToolCall>
 }
 
-#[derive(Clone)]
-pub struct ModelClient {
-    rpc: RpcClientService,
-    secret: PeerSecretManager
-}
-
-impl ModelClient {
-    #[must_use]
-    pub fn new(rpc: RpcClientService, secret: PeerSecretManager) -> Self {
-        Self {
-            rpc,
-            secret
-        }
-    }
-
-    /// Récupère la déclaration d'un modèle auprès du control plane. La clé
-    /// API a voyagé chiffrée sur le réseau — voir
-    /// [`NetworkClient::get_model`] et `SecretManager` — et n'est déchiffrée
-    /// en clair qu'à la réception, localement.
-    pub async fn get(&self, id: impl Into<ModelId>) -> Result<Model, ModelError> {
-        let id = id.into();
-        
-        let maybe_model = RpcCallArgs::builder()
-            .name("rpc/models/get")
-            .args(id.clone())
-            .build()
-            .call::<Option<EncryptedModel>>(&self.0)
-            .await?
-            .map(|encrypted| self.decrypt(encrypted));
-
-        maybe_model.ok_or_else(|| ModelError::UnknownModel(id))
-    }
-
-    /// Liste tout le catalogue de modèles connu du control plane.
-    pub async fn list(&self) -> Result<Vec<Model>, ModelError> {
-        let list = RpcCallArgs::builder()
-            .name("rpc/models/list")
-            .args(Void)
-            .build()
-            .call::<Vec<EncryptedModel>>(&self.rpc)
-            .await?
-            .into_iter()
-            .map(|encrypted| self.decrypt(encrypted));
-
-        Ok(list.collect())
-    }
-
-    /// Crée ou remplace la déclaration d'un modèle dans le catalogue.
-    pub async fn upsert(&self, model: Model) -> Result<(), ModelError> {
-        RpcCallArgs::builder()
-            .name("rpc/models/upsert")
-            .args(model)
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
-
-        Ok(())
-    }
-
-    /// Retire un modèle du catalogue.
-    pub async fn remove(&self, id: impl Into<ModelId>) -> Result<(), ModelError> {
-        RpcCallArgs::builder()
-            .name("rpc/models/delete")
-            .args(id.into())
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
-
-        Ok(())
-    }
-
-    fn decrypt(&self, model: EncryptedModel) -> Model {
-        let api_key = model.api_key();
-        let api_key = self.secret.decrypt(api_key).unwrap();
-        model.decrypt(api_key)
-    }
-
-    fn encrypt(&self, model: Model) -> EncryptedModel {
-        let api_key = model.api_key();
-        let api_key = self.secret.encrypt(api_key).unwrap();
-        model.encrypt(api_key)
-    }
-}
-
-
 pub async fn execute(decl: Model, tools: &[ToolSignature], input: impl Into<String>) -> Result<ModelResponse, ModelError> {
-    let Model::OpenAICompatible { base_url, client_id, api_key, model, system_prompt } = decl;
+    let Model::OpenAICompatible { base_url, client_id, api_key, model, system_prompt, .. } = decl;
 
     let config = OpenAIConfig::new()
         .with_api_base(base_url)
@@ -180,6 +92,8 @@ mod tests {
     use serde_json::json;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::{method, path}};
 
+    use crate::id;
+
     use super::*;
 
     /// Modèle pointant vers `base_url` — un serveur `wiremock` local dans les
@@ -188,6 +102,7 @@ mod tests {
     /// sans dépendre d'une vraie API OpenAI.
     fn model(base_url: String) -> Model {
         Model::OpenAICompatible {
+            id: id::generate_id().to_string(),
             base_url,
             client_id: "test-org".to_string(),
             api_key: "sk-test".to_string(),

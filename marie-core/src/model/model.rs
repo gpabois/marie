@@ -46,7 +46,9 @@ impl Borrow<str> for ModelId {
 /// exemple un provider avec une authentification différente) pourront
 /// coexister sans forcer des champs `Option` non pertinents sur les autres.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum Model {
+    #[serde(rename = "open-ai-compat")]
     OpenAICompatible {
         id: String,
         base_url: String,
@@ -61,6 +63,11 @@ pub enum Model {
 }
 
 impl Model {
+    pub fn id(&self) -> &str {
+        match self {
+            Model::OpenAICompatible { id, .. } => id.as_str(),
+        }
+    }
     /// Clé API en clair de ce modèle — jamais transmise ni persistée telle
     /// quelle, voir [`Self::encrypt`].
     #[must_use]

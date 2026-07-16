@@ -18,7 +18,7 @@ impl Layer for PubSubLayer {
 }
 
 impl<L> LayerChain<L, ()> for PubSubLayer where L: Layer<Send=NetworkCommand, Received = NetworkEvent> {
-    fn chain(layer: L, args: ()) -> Self {
+    fn chain(layer: L, _: ()) -> Self {
         Self::new(layer)
     }
 }
@@ -37,11 +37,12 @@ impl PubSubLayer {
 
         let rx = rx.filter_map(|event| {
             match event {
-                NetworkEvent::PubSubReceived { topic, data: payload, source } => {
+                NetworkEvent::PubSubReceived { id, topic, data: payload, source } => {
                     std::future::ready(Some(PubSubMessage {
+                        id,
                         topic,
                         payload,
-                        source
+                        source: Some(source)
                     }))
                 },
                 _ => std::future::ready(None)

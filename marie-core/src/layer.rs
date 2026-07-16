@@ -9,10 +9,8 @@ pub trait Layer<Error=anyhow::Error> {
     fn split(self) -> (Self::Sender, Self::Receiver);
 }
 
-pub trait IntoService<S> {
-    type Args;
-    
-    fn into_service(self, args: Self::Args) -> S;
+pub trait IntoService<S, Args> {   
+    fn into_service(self, args: Args) -> S;
 }
 
 pub trait LayerChain<L, Args> {

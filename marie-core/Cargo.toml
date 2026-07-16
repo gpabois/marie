@@ -22,7 +22,7 @@ async-stream = "0.3.6"
 tracing = "0.1"
 strum = "0.26"
 strum_macros = "0.26"
-yrs = { version = "0.27.2", features = ["sync"] }
+loro = "1.13.7"
 parking_lot = "0.12.5"
 sysinfo = "0.30"
 # Network
@@ -38,6 +38,7 @@ libp2p = { version = "0.56.0",
         "tokio", 
         "macros", 
         "request-response", 
+        "rendezvous",
         "json", 
         "ed25519"
     ] 

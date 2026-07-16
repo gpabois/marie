@@ -1,6 +1,7 @@
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures::{SinkExt as _, StreamExt};
+use libp2p::PeerId;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::{mpsc, oneshot}};
 use tracing::warn;
@@ -34,7 +35,7 @@ enum RpcEvent {
 }
 
 impl RpcClientActor {
-    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>, registry: RpcRegistry) -> RpcClientService 
+    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcClient 
     {   
         let (tx, rx) = layer.split();
         let mut outcoming = Box::pin(tx);
@@ -52,20 +53,20 @@ impl RpcClientActor {
                 select! {
                     Some(call) = out_rx.recv() => {
                         let id = call.id;
-                        let destination = registry.find_best_candidate(&call.name);
 
-                        if destination.is_none() {
+                        if call.destination.is_none() {
                             warn!("no RPC server found to execute {}", call.name);
-                            let reply = RpcReply {
-                                id,
-                                destination: None,
-                                source: None,
-                                result: RpcResult::Error(RpcError::NoExecutorFound)
-                            };
-                            
-                            let _ = ev_tx_1.send(RpcEvent::OnReply(reply));
-                            continue;
+                                let reply = RpcReply {
+                                    id,
+                                    destination: None,
+                                    source: None,
+                                    result: RpcResult::Error(RpcError::NoExecutorFound)
+                                };
+                                
+                                let _ = ev_tx_1.send(RpcEvent::OnReply(reply));
+                                continue;
                         }
+
 
                         let id = call.id;
                         
@@ -154,7 +155,7 @@ impl RpcClientActor {
 
         let inner = Arc::new(RpcClientInner(cmd_tx.clone()));
 
-        RpcClientService {
+        RpcClient {
             tx: cmd_tx,
             id: Arc::new(id),
             inner
@@ -173,7 +174,7 @@ impl Drop for RpcClientInner {
 }
 
 #[derive(Clone)]
-pub struct RpcClientService {
+pub struct RpcClient {
     tx: mpsc::UnboundedSender<RpcCommand>,
     id: Arc<IdGenerator>,
     // used to stop the actor if the last client has been dropped
@@ -186,28 +187,22 @@ pub struct RpcCallArgs {
     name: String,
     #[builder(setter(transform = |x: impl Serialize| serde_json::to_value(x).unwrap()))]
     args: serde_json::Value,
-    #[builder(
-        default, 
-        setter(transform = |value: impl Serialize| serde_json::to_value(&value).map(Some).unwrap_or(None))
-    )]
-    source: Option<serde_json::Value>,
-    #[builder(
-        default, 
-        setter(transform = |value: impl Serialize| serde_json::to_value(&value).map(Some).unwrap_or(None))
-    )]
-    destination: Option<serde_json::Value>
+    #[builder(default, setter(strip_option))]
+    source: Option<PeerId>,
+    #[builder(default, setter(strip_option))]
+    destination: Option<PeerId>
 }
 
 impl RpcCallArgs {
     #[inline]
-    pub fn call<R: DeserializeOwned>(self, client: &RpcClientService) 
+    pub fn call<R: DeserializeOwned>(self, client: &RpcClient) 
     -> impl Future<Output=Result<R, RpcError>> 
     {
         client.call::<R>(self)
     }
 }
 
-impl RpcClientService {
+impl RpcClient {
     pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
         use RpcCommand::Execute;
 

@@ -20,6 +20,12 @@ pub struct IdGenerator {
 #[repr(C)]
 pub struct ID(u64, u64);
 
+impl AsRef<[u8]> for ID {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
 impl serde::Serialize for ID {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())

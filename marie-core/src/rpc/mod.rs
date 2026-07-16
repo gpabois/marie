@@ -1,8 +1,11 @@
 pub mod client;
-pub mod router;
 pub mod server;
 pub mod register;
 pub mod layers;
+pub mod event;
+
+pub use event::{RpcEvent, RpcEventKind};
+use libp2p::PeerId;
 
 use std::hash::Hash;
 
@@ -10,8 +13,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use crate::{id::ID, layer::{IntoService, Layer}, rpc::register::RpcRegistry};
 
-pub use server::{RpcServerActor, RpcServerService};
-pub use client::{RpcClientActor, RpcClientService};
+pub use server::{RpcServerActor, RpcServer};
+pub use client::{RpcClientActor, RpcClient};
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RpcCallId(ID);
@@ -21,8 +24,8 @@ pub struct RpcCall {
     pub id: RpcCallId,
     pub name: String,
     pub args: serde_json::Value,
-    pub destination: Option<serde_json::Value>,
-    pub source: Option<serde_json::Value>
+    pub destination: Option<PeerId>,
+    pub source: Option<PeerId>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -32,7 +35,7 @@ pub enum RpcMessage {
 }
 
 impl RpcMessage {
-    pub fn destination(&self) -> Option<serde_json::Value> {
+    pub fn destination(&self) -> Option<PeerId> {
         use RpcMessage::{Call, Reply};
 
         match self {
@@ -41,7 +44,7 @@ impl RpcMessage {
         }
     }
 
-    pub fn source(&self) -> Option<serde_json::Value> {
+    pub fn source(&self) -> Option<PeerId> {
         use RpcMessage::{Call, Reply};
 
         match self {
@@ -50,7 +53,7 @@ impl RpcMessage {
         }
     }
 
-    pub fn set_destination(&mut self, destination: Option<serde_json::Value>) {
+    pub fn set_destination(&mut self, destination: Option<PeerId>) {
         use RpcMessage::{Call, Reply};
         
         match self {
@@ -59,7 +62,7 @@ impl RpcMessage {
         }   
     }
 
-    pub fn set_source(&mut self, source: Option<serde_json::Value>) {
+    pub fn set_source(&mut self, source: Option<PeerId>) {
         use RpcMessage::{Call, Reply};
 
         match self {
@@ -87,8 +90,8 @@ pub enum RpcError {
 pub struct RpcReply {
     id: RpcCallId,
     result: RpcResult,
-    destination: Option<serde_json::Value>,
-    source: Option<serde_json::Value>
+    destination: Option<PeerId>,
+    source: Option<PeerId>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -120,19 +123,15 @@ impl<'de> Deserialize<'de> for Void {
 }
 
 
-impl<T> IntoService<RpcClientService> for T where T: Layer<Send=RpcMessage, Received=RpcMessage>{
-    type Args = RpcRegistry;
-
-    fn into_service(self, registry: Self::Args) -> RpcClientService {
+impl<T> IntoService<RpcClient, ()> for T where T: Layer<Send=RpcMessage, Received=RpcMessage>{
+    fn into_service(self, _: ()) -> RpcClient {
         let actor = RpcClientActor::default();
-        actor.run(self, registry)
+        actor.run(self)
     }
 }
 
-impl<T> IntoService<RpcServerService> for T where T: Layer<Send=RpcMessage, Received=RpcMessage> {
-    type Args = ();
-
-    fn into_service(self, _: Self::Args) -> RpcServerService {
+impl<T> IntoService<RpcServer, ()> for T where T: Layer<Send=RpcMessage, Received=RpcMessage> {
+    fn into_service(self, _: ()) -> RpcServer {
         let actor = RpcServerActor::default();
         actor.run(self)
     }

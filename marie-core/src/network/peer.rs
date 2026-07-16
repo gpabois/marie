@@ -7,9 +7,10 @@ pub struct PeerNode {
 
 #[derive(strum_macros::Display, strum_macros::EnumString)]
 pub enum NodeKind {
-    ControlPlane,
-    WorkerOrchestrator,
+    /// Noeud dédié à traiter des jobs
     Worker,
+    /// Noeud dédié à surveiller que les jobs arrivent à terme
+    WorkerWatchdog,
     /// Nœud dédié à la persistance durable de structures de données du
     /// cluster (aujourd'hui : le contenu CRDT des sessions, voir
     /// `network::persistency`) — ne participe ni au cluster Raft du control
