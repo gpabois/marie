@@ -48,7 +48,7 @@ impl ModelServer {
 
             async move {
                 let Some(model) = cat.lock().get(&args.model_id) else { return Err(format!("model indisponible {}", args.model_id)) };
-                execute(model, &args.tools, args.context).await.map_err(|err| err.to_string())
+                execute(args.session_id, model, &args.tools, args.context).await.map_err(|err| err.to_string())
             }
         });
 

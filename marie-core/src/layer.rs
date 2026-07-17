@@ -1,12 +1,19 @@
-use futures::{Sink, Stream};
+use futures::{Sink, Stream, StreamExt, stream::BoxStream};
 
-pub trait Layer<Error=anyhow::Error> {
+use crate::sink::{BoxSink, SinkBoxExt};
+
+pub trait Layer<Error=anyhow::Error>: Sized {
     type Send;
     type Received;
     type Sender: Sink<Self::Send, Error=Error> + Send + 'static;
     type Receiver: Stream<Item=Self::Received> + Send  + 'static;
 
     fn split(self) -> (Self::Sender, Self::Receiver);
+
+    fn boxed_split(self) -> (BoxSink<'static, Self::Send, Error>, BoxStream<'static, Self::Received>) {
+        let (tx, rx) = self.split();
+        (tx.boxed_sink(), rx.boxed())
+    }
 }
 
 pub trait IntoService<S, Args> {   

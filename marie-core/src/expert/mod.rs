@@ -1,3 +1,5 @@
 pub mod catalog;
 pub mod client;
-pub mod declaration;
+pub mod model;
+
+pub use model::ExpertId;

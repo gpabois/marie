@@ -22,8 +22,8 @@ pub struct MarieBehaviour {
 
 pub type MarieSwarm = Swarm<MarieBehaviour>;
 
-pub async fn create_swarm<Init: Fn(&mut MarieSwarm)>(kind: NodeKind, init: Init) -> Result<Swarm<MarieBehaviour>, anyhow::Error> {
-    let mut swarm = libp2p::SwarmBuilder::with_new_identity()
+pub async fn create_swarm(kind: NodeKind) -> Result<Swarm<MarieBehaviour>, anyhow::Error> {
+    let swarm = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(libp2p::tcp::Config::default(), libp2p::noise::Config::new, libp2p::yamux::Config::default)?
         .with_behaviour(|key| {
@@ -38,7 +38,7 @@ pub async fn create_swarm<Init: Fn(&mut MarieSwarm)>(kind: NodeKind, init: Init)
             ).unwrap();
 
             let oneway = request_response::json::Behaviour::new([
-                (StreamProtocol::new("/marie/one-way/1.0.0"), request_response::ProtocolSupport::Full)
+                (StreamProtocol::new("/marie/rpc/1.0.0"), request_response::ProtocolSupport::Full)
                 ], request_response::Config::default()
             );
 

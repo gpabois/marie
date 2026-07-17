@@ -1,7 +1,7 @@
 
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
-use crate::id::ID;
+use crate::{id::ID, network::worker::JobResult};
 
 pub type JobId = ID;
 // Diffusé sur Gossipsub par le Control Plane
@@ -22,8 +22,10 @@ pub struct Job {
 /// jamais en mutant celui-ci — c'est ce qui permet à
 /// `ControlPlaneState::jobs` de rester un simple historique append-only de
 /// runs plutôt qu'un état de session à faire évoluer en place.
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub enum JobState {
+    #[default]
+    Unknown,
     Pending,
     Scheduled { worker: PeerId },
     /// `worker` : rapporté par le worker lui-même (voir
@@ -32,6 +34,6 @@ pub enum JobState {
     /// directement depuis `jobs` (voir `ControlPlaneState::session_holders`)
     /// sans pointeur séparé.
     Running { worker: PeerId },
-    Completed,
+    Completed(serde_json::Value),
     Failed { error: String },
 }

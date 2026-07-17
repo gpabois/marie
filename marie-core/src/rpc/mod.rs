@@ -11,7 +11,7 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use crate::{id::ID, layer::{IntoService, Layer}, rpc::register::RpcRegistry};
+use crate::{id::ID, layer::{IntoService, Layer, LayerExt as _}, network::{actor::Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::register::RpcRegistry};
 
 pub use server::{RpcServerActor, RpcServer};
 pub use client::{RpcClientActor, RpcClient};
@@ -135,4 +135,18 @@ impl<T> IntoService<RpcServer, ()> for T where T: Layer<Send=RpcMessage, Receive
         let actor = RpcServerActor::default();
         actor.run(self)
     }
+}
+
+pub fn build_server(network: &Network) -> RpcServer {
+    network.transport()
+        .chain::<FrameLayer, _>(())
+        .chain::<RpcMuxLayer, _>(())
+        .into_service(())
+}
+
+pub fn build_client(network: &Network) -> RpcClient {
+    network.transport()
+        .chain::<FrameLayer, _>(())
+        .chain::<RpcMuxLayer, _>(())
+        .into_service(())
 }

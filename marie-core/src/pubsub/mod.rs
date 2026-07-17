@@ -1,9 +1,7 @@
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
-use crate::id::ID;
-
-pub mod layer;
+pub mod layers;
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct PubSubMessage {
@@ -12,3 +10,10 @@ pub struct PubSubMessage {
     pub payload: Vec<u8>,
     pub source: Option<PeerId>
 }
+
+enum Command {
+    Subscribe(String),
+    Unsubscribe(String)
+}
+
+pub struct PubSub;

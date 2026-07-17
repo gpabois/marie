@@ -9,11 +9,46 @@ use crate::{
 */
 
 pub use context::Context;
+use thiserror::Error;
+
+use crate::{expert::ExpertId, hitl::HitlId, id::ID, model::model::ModelId, session::SessionId};
 
 pub mod status;
 pub mod frame;
 pub mod context;
 pub mod role;
+
+#[derive(Clone, Copy)]
+pub struct AgentId(SessionId, ID);
+
+pub struct Agent {
+    id: AgentId,
+    status: AgentStatus,
+    context: Context,
+    kind: AgentKind
+}
+
+pub enum AgentKind {
+    Bare(ModelId),
+    Expert(ExpertId)
+}
+
+pub enum AgentStatus {
+    Running,
+    Yielding(Yielding),
+    Done(Option<String>)
+}
+
+#[derive(Debug, Error)]
+pub enum AgentError {
+    #[error("l'agent a épuisé sa réserve de boucles")]
+    RunCounterExhausted
+}
+
+pub enum Yielding {
+    YieldingAgents(Vec<AgentId>),
+    YieldingHitl(HitlId)
+}
 
 /* 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]

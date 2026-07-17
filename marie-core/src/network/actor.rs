@@ -1,8 +1,10 @@
+use futures::channel::oneshot;
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
 use libp2p::rendezvous::{self, Namespace, Ttl};
 use libp2p::{gossipsub, identify, mdns, request_response};
 use libp2p::{PeerId, swarm::SwarmEvent};
+use tokio::sync::watch;
 use tokio::{select, sync::{broadcast, mpsc}};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
@@ -136,7 +138,8 @@ impl NetworkLayer {
 }
 
 #[derive(Clone)]
-pub struct NetworkService {
+pub struct Network {
+    shutdown_signal: watch::Receiver<bool>,
     commands: mpsc::UnboundedSender<NetworkCommand>,
     /// Diffusion des [`NetworkEvent`] de ce nœud — voir [`Self::subscribe_events`].
     events: broadcast::Sender<NetworkEvent>,
@@ -144,7 +147,7 @@ pub struct NetworkService {
     local_peer_id: PeerId,
 }
 
-impl NetworkService {
+impl Network {
     /// Récupère la couche de transport du réseau
     pub fn transport(&self) -> NetworkLayer {
         let sender = NetworkSender(self.commands.clone());
@@ -153,8 +156,13 @@ impl NetworkService {
     }
 
     /// Connecte le noeud au réseau
-    pub fn listen(&self) {
+    pub async fn listen(mut self) {
         self.commands.send(NetworkCommand::Listen);
+        loop {
+            select! {
+                _ = self.shutdown_signal.changed() => break
+            }
+        }
     }
 
     /// S'abonne à un topic gossipsub (`node_gossip`) : les messages publiés
@@ -178,6 +186,7 @@ impl NetworkService {
     }
 }
 pub struct NetworkActor {
+    shutdown_signal: watch::Sender<bool>,
     kind: NodeKind,
     swarm: MarieSwarm,
     // Diffusion des `NetworkEvent` (voir `NetworkClient::subscribe_events`)
@@ -189,13 +198,16 @@ pub struct NetworkActor {
 
 impl NetworkActor {
     #[must_use]
-    pub fn new(swarm: MarieSwarm, kind: NodeKind) -> NetworkService {
+    pub fn new(swarm: MarieSwarm, kind: NodeKind) -> Network {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
+        let (shutdown_subscribers, shutdown_signal) = watch::channel(false);
+
         let local_peer_id = *swarm.local_peer_id();
+        
 
-
-        let client = NetworkService {
+        let client = Network {
+            shutdown_signal,
             commands: commands_tx.clone(),
             events: events_tx.clone(),
             local_peer_id,
@@ -204,6 +216,7 @@ impl NetworkActor {
 
 
         let actor = NetworkActor {
+            shutdown_signal: shutdown_subscribers,
             kind,
             swarm,
             events_tx,
@@ -339,6 +352,8 @@ impl NetworkActor {
             }
         }
         
+        let _ = self.shutdown_signal.send(true);
+
         Ok(())
     }
 }

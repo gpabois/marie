@@ -3,8 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-use crate::id::ID;
-use crate::model::declaration::ModelId;
+use crate::model::ModelId;
 use crate::tools::declaration::ToolId;
 
 /// Identifiant unique d'un expert dans l'[`ExpertCatalog`](crate::expert::catalog::ExpertCatalog).
@@ -12,8 +11,8 @@ use crate::tools::declaration::ToolId;
 pub struct ExpertId(String);
 
 impl ExpertId {
-    pub fn new(id: impl Into<String>) -> Self {
-        Self(id.into())
+    pub fn new(id: impl ToString) -> Self {
+        Self(id.to_string())
     }
 }
 
@@ -55,7 +54,7 @@ impl Borrow<str> for ExpertId {
 /// se fait au moment de l'utilisation, pas à la déclaration de l'expert.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Expert {
-    pub id: ID,
+    pub id: ExpertId,
     pub prompt: String,
     pub model_id: ModelId,
     pub allowed_tools: Vec<ToolId>,

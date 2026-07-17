@@ -4,7 +4,7 @@ pub mod tools;
 //pub mod session;
 // pub mod protocol;
 pub mod model;
-//pub mod expert;
+pub mod expert;
 //pub mod hitl;
 //pub mod mode;
 pub mod secret;
@@ -16,6 +16,8 @@ pub mod sink;
 pub mod layer;
 pub mod pubsub;
 pub mod node;
+pub mod session;
+pub mod hitl;
 // pub mod persistency;
 
 pub use node::{Marie, MarieConfig, MarieHandle, NodeRole};
