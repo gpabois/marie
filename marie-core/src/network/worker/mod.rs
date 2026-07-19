@@ -1,9 +1,16 @@
-use libp2p::rendezvous::Namespace;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
-use crate::{job::{Job, JobId, JobState}, layer::{IntoService as _, LayerExt as _}, model::client::ModelClient, network::{actor::{Network, NetworkActor}, bootstrap::{self, BootstrapClientActor, client::BootstrapArgs}, create_swarm, mux::FrameLayer, rpc::RpcMuxLayer, worker::{layers::WorkerEventLayer, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}, watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}}, pubsub::{PubSubMessage, layers::PubSubLayer}, rpc::{self, RpcClient, RpcError, RpcServer, RpcServerActor}, secret::{SecretKey, SecretManager}, tools::{JOB_TOOL_EXECUTE, ToolCall, worker::ToolWorker}};
+use crate::{
+    job::{JobInstance, JobId, JobState}, layer::{IntoService as _, LayerExt as _}, network::{actor::{Network, NetworkActor},
+    bootstrap::{self, client::BootstrapArgs}, 
+    create_swarm,  
+    worker::{layers::WorkerEventLayer, 
+    server::{WorkerServer, WorkerServerArgs},
+    watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}}, pubsub::{PubSubMessage, layers::PubSubLayer}, rpc::{self, RpcError}, secret::SecretKey,
+    session::client::SessionClient, tools::{builtin::register_builtins_tools_executors, worker::{ToolWorkerArgs, ToolWorker}}
+};
 
 pub mod info;
 pub mod client;
@@ -74,18 +81,15 @@ impl WorkerEvent {
     pub fn topic(&self) -> String {
         match self {
             WorkerEvent::JobDone { .. } => format!("{0}/job-done", Self::TOPIC_PREFIX),
-            WorkerEvent::JobStateUpdate { id, state } => todo!(),
+            WorkerEvent::JobStateUpdate { .. } => format!("{0}/job-state-update", Self::TOPIC_PREFIX),
         }
     }
 }
 
-pub struct JobContext {
-
-}
 
 #[derive(TypedBuilder)]
 pub struct WorkerArgs {
-    master_key: SecretKey
+    tools: ToolWorkerArgs
 }
 
 pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
@@ -105,8 +109,11 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
         .job_context_builder(|_| JobContext {})
         .build();
 
-    let worker_server = build_server(&net, worker_args);
-    let tool_worker = ToolWorker::new(&worker_server);
+    let mut worker_server = build_server(&net, worker_args);
+
+    let sessions = SessionClient::new(local_peer_id, rpc::build_client(&net), bootstrap.clone());
+    let tools = register_builtins_tools_executors(args.tools, sessions.clone());
+    ToolWorker::new(tools, sessions).register(&mut worker_server);
 
     net.clone().listen().await;
 
@@ -138,8 +145,8 @@ pub async fn start_watchdog() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
-pub fn build_server<Cx, B>(net: &Network, args: WorkerServerArgs<Cx, B>) -> WorkerServer<Cx> 
-where B: Fn(&Job) -> Cx + Send + Sync + 'static, Cx: Send + 'static
+pub fn build_server<Cx, B>(net: &Network, args: WorkerServerArgs<Cx, B>) -> WorkerServer<Cx>
+where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static, Cx: Send + 'static
 {
     net.transport()
         .chain::<PubSubLayer, _>(())

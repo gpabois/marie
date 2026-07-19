@@ -7,7 +7,7 @@ use tokio::{select, sync::{mpsc, oneshot}};
 use tracing::warn;
 use typed_builder::TypedBuilder;
 
-use crate::{id::IdGenerator, layer::Layer, rpc::{RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult, register::RpcRegistry}};
+use crate::{id::IdGenerator, layer::Layer, rpc::{RemoteProcedureCall, RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult, register::RpcRegistry}};
 
 struct RpcHandler {
     sent_at: std::time::Instant,
@@ -30,7 +30,8 @@ enum RpcCommand {
 
 enum RpcEvent {
     OnReply(RpcReply),
-    OnRequest(RpcRequest), 
+    OnAck(RpcAck),
+    OnRequest(RpcRequest),
     Shutdown
 }
 
@@ -90,12 +91,20 @@ impl RpcClientActor {
 
         let ev_tx_2 = ev_tx.clone();
         let incoming_task = tokio::spawn(async move {
-            use RpcMessage::Reply;
-
             loop {
                 select! {
-                    Some(Reply(reply)) = incoming.next() => {
-                        let _ = ev_tx_2.send(RpcEvent::OnReply(reply));
+                    Some(msg) = incoming.next() => {
+                        match msg {
+                            RpcMessage::Reply(reply) => {
+                                let _ = ev_tx_2.send(RpcEvent::OnReply(reply));
+                            },
+                            RpcMessage::Ack(ack) => {
+                                let _ = ev_tx_2.send(RpcEvent::OnAck(ack));
+                            },
+                            RpcMessage::Call(_) => {
+                                // le client ne reçoit jamais d'appel entrant
+                            }
+                        }
                     }
                 }
             }
@@ -138,6 +147,11 @@ impl RpcClientActor {
                             RpcEvent::OnReply(reply) => {
                                 if let Some(hdlr) = ongoings.remove(&reply.id) {
                                     let _ = hdlr.tx.send(reply.result);
+                                }
+                            },
+                            RpcEvent::OnAck(ack) => {
+                                if let Some(hdlr) = ongoings.get_mut(&ack.id) {
+                                    hdlr.sent_at = std::time::Instant::now();
                                 }
                             }
                         }
@@ -203,6 +217,20 @@ impl RpcCallArgs {
 }
 
 impl RpcClient {
+    pub async fn invoke<Rpc: RemoteProcedureCall>(
+        &self, 
+        args: impl Into<Rpc::Args>, 
+        destinations: impl IntoIterator<Item=PeerId>
+    ) -> Result<Rpc::Return, RpcError> {
+        RpcCallArgs::builder()
+            .name(Rpc::NAME)
+            .args(args.into())
+            .destination(destinations.into_iter().next().unwrap())
+            .build()
+            .call::<Rpc::Return>(&self)
+            .await
+    }
+
     pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
         use RpcCommand::Execute;
 

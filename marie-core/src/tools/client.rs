@@ -2,7 +2,8 @@ use libp2p::PeerId;
 use thiserror::Error;
 
 use crate::{
-    network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void, client::RpcCallArgs}, tools::{NS_TOOL, RPC_TOOL_EXECUTE, RPC_TOOL_GET, RPC_TOOL_LIST, RPC_TOOL_REMOVE, Tool, ToolCall, ToolCallError, ToolId}
+    network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void},
+    tools::{NS_TOOL, Tool, ToolCall, ToolCallError, ToolId, rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool}}
 };
 
 #[derive(Debug, Error)]
@@ -50,29 +51,36 @@ impl ToolClient {
 
         let server = self.select_server(&id)?;
 
-        RpcCallArgs::builder()
-            .name(RPC_TOOL_GET)
-            .args(&id)
-            .destination(server)
-            .build()
-            .call::<Option<Tool>>(&self.rpc)
-            .await?
-            .ok_or(ToolError::UnknownTool(id))
+        self.rpc.invoke::<GetTool>(id.clone(), [server]).await?.ok_or(ToolError::UnknownTool(id))
     }
 
     /// Liste tout le catalogue de tools connu du control plane.
     pub async fn list(&self) -> Result<Vec<Tool>, ToolError> {
         let server = self.select_server(&self.local_peer_id.to_bytes())?;
 
-        let list = RpcCallArgs::builder()
-            .name(RPC_TOOL_LIST)
-            .args(Void)
-            .destination(server)
-            .build()
-            .call::<Vec<Tool>>(&self.rpc)
-            .await?;
+        let list = self.rpc.invoke::<ListTool>(Void, [server]).await?;
 
         Ok(list)
+    }
+
+    /// Crée un tool dans le catalogue.
+    pub async fn insert(&self, id: impl Into<ToolId>, tool: Tool) -> Result<(), ToolError> {
+        let id = id.into();
+        let server = self.select_server(&id)?;
+
+        self.rpc.invoke::<InsertTool>((id, tool), [server]).await?;
+
+        Ok(())
+    }
+
+    /// Met à jour la déclaration d'un tool existant.
+    pub async fn update(&self, id: impl Into<ToolId>, tool: Tool) -> Result<(), ToolError> {
+        let id = id.into();
+        let server = self.select_server(&id)?;
+
+        self.rpc.invoke::<UpdateTool>((id, tool), [server]).await?;
+
+        Ok(())
     }
 
     /// Retire un tool du catalogue (répliqué via Raft, voir
@@ -82,13 +90,7 @@ impl ToolClient {
 
         let server = self.select_server(&id)?;
 
-        RpcCallArgs::builder()
-            .name(RPC_TOOL_REMOVE)
-            .args(&id)
-            .destination(server)
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
+        self.rpc.invoke::<RemoveTool>(id, [server]).await?;
 
         Ok(())
     }
@@ -96,13 +98,7 @@ impl ToolClient {
     pub async fn execute(&self, args: ToolCall) -> Result<(), ToolError> {
         let server = self.select_server(&args.id)?;
 
-        RpcCallArgs::builder()
-            .name(RPC_TOOL_EXECUTE)
-            .args(args)
-            .destination(server)
-            .build()
-            .call::<Result<(), String>>(&self.rpc)
-            .await?;
+        self.rpc.invoke::<ExecuteTool>(args, [server]).await?;
 
         Ok(())
     }

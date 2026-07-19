@@ -45,6 +45,21 @@ impl ModelCatalog {
         serde_json::from_value(value.to_json_value()).ok()
     }
 
+    pub fn remove(&mut self, id: &str) -> Option<Model> {
+        let removed = self.get(id);
+        let models = self.state.get_map("models");
+        let _ = models.delete(id);
+        removed
+    }
+
+    pub fn list(&self) -> Vec<Model> {
+        let models = self.state.get_map("models");
+        models
+            .values()
+            .filter_map(|value| value.as_value().and_then(|v| serde_json::from_value(v.to_json_value()).ok()))
+            .collect()
+    }
+
 }
 
 #[derive(Serialize, Deserialize)]

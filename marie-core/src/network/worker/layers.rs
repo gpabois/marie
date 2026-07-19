@@ -1,6 +1,6 @@
 use futures::{SinkExt as _, StreamExt as _, stream::BoxStream};
 
-use crate::{job::Job, layer::{IntoService, Layer, LayerChain}, network::worker::{WorkerEvent, client::{WorkerClient, WorkerClientActor, WorkerClientArgs}, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}, watchdog::{WorkerWatchdog, WorkerWatchdogActor, WorkerWatchdogArgs}}, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt as _}};
+use crate::{job::JobInstance, layer::{IntoService, Layer, LayerChain}, network::worker::{WorkerEvent, client::{WorkerClient, WorkerClientActor, WorkerClientArgs}, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}, watchdog::{WorkerWatchdog, WorkerWatchdogActor, WorkerWatchdogArgs}}, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt as _}};
 
 pub struct WorkerEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 
@@ -40,7 +40,7 @@ impl<T> IntoService<WorkerWatchdog, WorkerWatchdogArgs> for T
 impl<B, Cx, T> IntoService<WorkerServer<Cx>, WorkerServerArgs<Cx, B>> for T 
     where 
             T: Layer<Send = WorkerEvent, Received = WorkerEvent>,
-            B: Fn(&Job) -> Cx + Send + Sync + 'static,
+            B: Fn(&JobInstance) -> Cx + Send + Sync + 'static,
             Cx: Send + 'static
 {
 

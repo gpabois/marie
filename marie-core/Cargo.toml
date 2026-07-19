@@ -12,7 +12,6 @@ serde_json = "1.0.150"
 rand_xoshiro = "0.8.1"
 getrandom = { version = "0.2", features = ["js"] }
 bytemuck = { version = "1.14", features = ["derive"] }
-openraft = { version = "0.9.24", features = ["serde", "storage-v2"] }
 futures = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["rt-multi-thread"] }
@@ -46,7 +45,7 @@ libp2p = { version = "0.56.0",
 
 
 # IA Model
-async-openai = {version = "0.41.1", features = ["_api", "responses", "response-types"]}
+async-openai = {version = "0.41.1", features = ["_api", "responses", "response-types", "chat-completion-types"]}
 
 # Cryptography & Secrets
 chacha20poly1305 = "0.10"
@@ -72,5 +71,6 @@ object_store = { version = "0.14.0", features = ["aws"] }
 # qu'un fichier redb embarqué par nœud.
 sqlx = { version = "0.9", default-features = false, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "json"] }
 futures-util.workspace = true
+jsonpath_lib = "0.3.0"
 [dev-dependencies]
 wiremock = "0.6.5"

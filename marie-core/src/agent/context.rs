@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::agent::role::Role;
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Context(Vec<ContextEntry>);
 
 impl ToString for Context {
@@ -34,7 +34,7 @@ impl From<Vec<ContextEntry>> for Context {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ContextEntry {
     pub role: Role,
     pub content: String

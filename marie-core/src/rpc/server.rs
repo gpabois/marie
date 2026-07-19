@@ -6,8 +6,9 @@ use libp2p::PeerId;
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::mpsc, task::JoinHandle};
+use tracing::warn;
 
-use crate::{layer::Layer, rpc::{RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
+use crate::{layer::Layer, rpc::{RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
 
 #[derive(Default)]
 pub struct RpcServerActor {
@@ -28,7 +29,7 @@ impl RpcServer {
 
 impl RpcServer {
     /// Enregistre un RPC au nom donné
-    pub fn register<F, Args, R, Fut>(&mut self, name: impl ToString, f: F) -> Result<(), anyhow::Error>
+    pub fn register<F, Args, R, Fut>(&mut self, name: impl ToString, f: F)
         where 
             F: Fn(Args, PeerId) -> Fut + Send + Sync + 'static, 
             Fut: Future<Output = R> + Send + 'static,
@@ -40,10 +41,7 @@ impl RpcServer {
         let name = name.to_string();
         let exe = RpcExecutor::new(f);
         self.executed.lock().push(name.clone());
-        self.tx.send(Register(name, exe))?;
-
-
-        Ok(())
+        let _ = self.tx.send(Register(name, exe));
     } 
 }
 
@@ -91,7 +89,7 @@ impl RpcServerActor {
         tokio::spawn(async move {
             use RpcEvent::*;
             use RpcCommand::*;
-            use RpcMessage::Reply;
+            use RpcMessage::{Ack, Reply};
 
             let mut ongoings = HashMap::<RpcCallId, RpcInfo>::default();
 
@@ -107,6 +105,11 @@ impl RpcServerActor {
                                 // si la tâche existe déjà, on la laisse tourner.
                                 if let Some(info) = ongoings.get(&call.id) && info.handle.is_some() { continue }
                                 if let Some(executor) = executors.get(&call.name).cloned() {
+                                    let ack = RpcAck { id: call.id, destination: call.source, source: call.destination };
+                                    if let Err(err) = tx.send(Ack(ack)).await {
+                                        warn!("échec de l'envoi de l'accusé de réception RPC pour {} : {err}", call.name);
+                                    }
+
                                     let task = executor.execute(call.args.clone(), call.source.unwrap());
                                     let ev_tx_h = ev_tx.clone();
                                     
@@ -150,7 +153,9 @@ impl RpcServerActor {
                             },
                             Finished(reply) => {
                                 ongoings.remove(&reply.id);
-                                let _ = tx.send(Reply(reply));
+                                if let Err(err) = tx.send(Reply(reply)).await {
+                                    warn!("échec de l'envoi de la réponse RPC : {err}");
+                                }
                             },
                         }
                     }

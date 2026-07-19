@@ -10,7 +10,7 @@ const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
 /// CRUD spécifique du cluster (`persistency::SessionStore`,
 /// `persistency::WorkspaceStore`, `model::catalog::store::ModelStore`,
 /// `tools::catalog::store::ToolStore`, `expert::catalog::store::ExpertStore`,
-/// `mode::state_graph::catalog::store::StateGraphStore`), alternative à
+/// `session::state::catalog::store::StateGraphStore`), alternative à
 /// [`super::postgres::PostgresStore`] pour les déploiements sans
 /// infrastructure partagée.
 ///
@@ -18,7 +18,7 @@ const KV_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("kv");
 /// objet du domaine a son propre trait, avec ses propres méthodes, implémenté
 /// directement pour [`RedbStore`] là où il est défini (voir
 /// `persistency::session`/`persistency::workspace`,
-/// `model`/`tools`/`expert`/`mode::state_graph::catalog::store`). Une seule table `redb` héberge
+/// `model`/`tools`/`expert`/`session::state::catalog::store`). Une seule table `redb` héberge
 /// néanmoins tous ces types, distingués par un préfixe de clé
 /// (`namespace/id`) plutôt qu'une table par type — `redb` n'a pas de notion
 /// de table nommée dynamiquement aussi bon marché qu'un préfixe de clé — d'où

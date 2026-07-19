@@ -148,7 +148,7 @@ pub async fn dispatch(state: &GatewayState, registry: &HitlRegistry, msg: Client
             let frame = AgentFrame {
                 session_id,
                 id: local_id,
-                model_id,
+                model: model_id,
                 status: AgentStatus::Initial,
                 allowed_tools,
                 context: vec![ContextEntry { role: Role::User, content: text }].into(),

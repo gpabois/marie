@@ -115,7 +115,7 @@ impl From<&AgentFrame> for FrameSnapshot {
         Self {
             session_id: frame.session_id,
             id: frame.id,
-            model_id: frame.model_id.clone(),
+            model_id: frame.model.clone(),
             status: frame.status.clone(),
             allowed_tools: frame.allowed_tools.clone(),
             context: frame.context.to_vec(),

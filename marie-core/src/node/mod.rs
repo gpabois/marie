@@ -43,7 +43,7 @@ pub enum NodeRole {
     /// d'experts (voir `expert::catalog::store`).
     ///
     /// `state_graph_store` : équivalent de `model_store` pour le catalogue
-    /// de graphes d'états (voir `mode::state_graph::catalog::store`).
+    /// de graphes d'états (voir `session::state::catalog::store`).
     Structure {
     },
     /// `pool`/`store` : backends du VFS des sessions exécutées par ce worker
@@ -54,8 +54,8 @@ pub enum NodeRole {
     /// backend : mémoire, S3/compatible S3).
     ///
     /// `rust_registry` : fonctions Rust utilisables comme `Executable::Rust`
-    /// par les nœuds/arêtes d'un `mode::state_graph::StateGraph` exécuté par
-    /// ce worker (voir `mode::executable::RustRegistry`) — à peupler par
+    /// par les nœuds/arêtes d'un `session::state::StateGraph` exécuté par
+    /// ce worker (voir `session::state::executable::RustRegistry`) — à peupler par
     /// l'appelant, qui garde la main dessus après `start` (bon marché à
     /// cloner, mutation intérieure) pour y enregistrer de nouvelles
     /// fonctions à tout moment.

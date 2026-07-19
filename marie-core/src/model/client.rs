@@ -1,6 +1,6 @@
 use libp2p::PeerId;
 
-use crate::{model::{EncryptedModel, Model, ModelError::{self, SecretError}, ModelResponse, NS_MODEL, RPC_MODEL_GET, RPC_MODEL_INSERT, RPC_MODEL_LIST, RPC_MODEL_REMOVE, RPC_MODEL_RUN, RPC_MODEL_UPDATE, RunModelArgs, catalog::{ModelChangeSet, ModelId}}, network::bootstrap::BootstrapClient, rpc::{RpcClient, Void, client::RpcCallArgs}, secret::{Encryptable, SecretManager}};
+use crate::{model::{Model, ModelError::{self, SecretError}, NS_MODEL, catalog::{ModelChangeSet, ModelId}, rpc::{GetModel, InsertModel, ListModel, RemoveModel, UpdateModel}}, network::bootstrap::BootstrapClient, rpc::{RpcClient, Void}, secret::{Encryptable, SecretManager}};
 
 #[derive(Clone)]
 pub struct ModelClient {
@@ -27,12 +27,8 @@ impl ModelClient {
         let sec = self.secret.for_peer(self.local_peer_id);
         let catalog = self.select_catalog(&id)?;
 
-        RpcCallArgs::builder()
-            .name(RPC_MODEL_GET)
-            .args(&id)
-            .destination(catalog)
-            .build()
-            .call::<Option<EncryptedModel>>(&self.rpc)
+        self.rpc
+            .invoke::<GetModel>(id.clone(), [catalog])
             .await?
             .ok_or_else(|| ModelError::UnknownModel(id))
             .and_then(|encrypted| Model::decrypt(encrypted, &sec).map_err(SecretError))
@@ -43,12 +39,8 @@ impl ModelClient {
         let sec = self.secret.for_peer(self.local_peer_id);
         let catalog = self.select_catalog(self.local_peer_id.to_bytes())?;
 
-        let list = RpcCallArgs::builder()
-            .name(RPC_MODEL_LIST)
-            .args(Void)
-            .destination(catalog)
-            .build()
-            .call::<Vec<EncryptedModel>>(&self.rpc)
+        let list = self.rpc
+            .invoke::<ListModel>(Void, [catalog])
             .await?
             .into_iter()
             .map(|encrypted| Model::decrypt(encrypted, &sec))
@@ -61,12 +53,7 @@ impl ModelClient {
         let catalog = self.select_catalog(model.id())?;
         let sec = self.secret.for_peer(catalog);
 
-        RpcCallArgs::builder()
-            .name(RPC_MODEL_INSERT)
-            .args(model.encrypt(&sec)?)
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
+        self.rpc.invoke::<InsertModel>(model.encrypt(&sec)?, [catalog]).await?;
 
         Ok(())
     }
@@ -76,12 +63,7 @@ impl ModelClient {
         let catalog = self.select_catalog(&changeset.id)?;
         let sec = self.secret.for_peer(catalog);
 
-        RpcCallArgs::builder()
-            .name(RPC_MODEL_UPDATE)
-            .args(changeset.encrypt(&sec)?)
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
+        self.rpc.invoke::<UpdateModel>(changeset.encrypt(&sec)?, [catalog]).await?;
 
         Ok(())
     }
@@ -92,30 +74,9 @@ impl ModelClient {
 
         let catalog = self.select_catalog(&id)?;
 
-        RpcCallArgs::builder()
-            .name(RPC_MODEL_REMOVE)
-            .args(id)
-            .destination(catalog)
-            .build()
-            .call::<Void>(&self.rpc)
-            .await?;
+        self.rpc.invoke::<RemoveModel>(id, [catalog]).await?;
 
         Ok(())
-    }
-
-    pub async fn run(&self, args: RunModelArgs) -> Result<ModelResponse, ModelError> {
-        let catalog = self.select_catalog(&args.model_id)?;
-
-        let response = RpcCallArgs::builder()
-            .name(RPC_MODEL_RUN)
-            .args(args)
-            .destination(catalog)
-            .build()
-            .call::<Result<ModelResponse, String>>(&self.rpc)
-            .await?
-            .map_err(ModelError::Custom)?;
-
-        Ok(response)
     }
 
     /// Sélection déterministe d'un catalogue.

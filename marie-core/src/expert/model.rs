@@ -4,7 +4,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::model::ModelId;
-use crate::tools::declaration::ToolId;
+use crate::tools::ToolId;
 
 /// Identifiant unique d'un expert dans l'[`ExpertCatalog`](crate::expert::catalog::ExpertCatalog).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -37,6 +37,12 @@ impl From<&str> for ExpertId {
 impl Borrow<str> for ExpertId {
     fn borrow(&self) -> &str {
         &self.0
+    }
+}
+
+impl AsRef<[u8]> for ExpertId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
     }
 }
 

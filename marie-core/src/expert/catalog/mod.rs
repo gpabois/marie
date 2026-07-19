@@ -1,36 +1,54 @@
-pub mod store;
+// pub mod store;
 
-use std::{collections::HashMap, ops::Deref};
+use std::borrow::Borrow;
 
-use serde::{Deserialize, Serialize};
+use loro::{LoroDoc, ToJson};
 
-use crate::expert::declaration::Expert;
+pub use super::{Expert, ExpertId};
 
-pub use crate::expert::declaration::ExpertId;
-
-/// Catalogue des experts connus du cluster, répliqué via Raft (voir
-/// `network::cp::state::ControlPlaneState::experts`). Lecture seule depuis
-/// l'extérieur (voir [`Deref`]) : toute mutation passe par
-/// [`Self::insert`]/[`Self::remove`], appelées uniquement depuis
-/// `network::cp::state::apply_request` sur des commandes déjà committées par
-/// le cluster — jamais directement.
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct ExpertCatalog(HashMap<ExpertId, Expert>);
-
-impl Deref for ExpertCatalog {
-    type Target = HashMap<ExpertId, Expert>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
+/// Catalogue des experts connus du cluster, sur le même principe que
+/// [`crate::model::catalog::ModelCatalog`] : un état CRDT (`loro`) plutôt
+/// qu'une structure locale opaque, pour permettre une fusion décentralisée
+/// entre control planes (voir la doc de `ModelCatalog` pour la justification
+/// du choix CRDT plutôt qu'un simple log Raft).
+pub struct ExpertCatalog {
+    state: LoroDoc,
 }
 
 impl ExpertCatalog {
-    pub fn insert(&mut self, id: ExpertId, declaration: Expert) -> Option<Expert> {
-        self.0.insert(id, declaration)
+    pub fn new() -> ExpertCatalog {
+        let state = LoroDoc::new();
+        state.get_map("experts");
+
+        Self { state }
     }
 
-    pub fn remove(&mut self, id: &ExpertId) -> Option<Expert> {
-        self.0.remove(id)
+    pub fn insert(&mut self, expert: Expert) {
+        let key: &str = expert.id.borrow();
+        let value = serde_json::to_value(&expert).unwrap();
+        let experts = self.state.get_map("experts");
+        experts.insert(key, value).unwrap();
+    }
+
+    pub fn get(&self, id: &str) -> Option<Expert> {
+        let experts = self.state.get_map("experts");
+        let value = experts.get(id)?;
+        let value = value.as_value()?;
+        serde_json::from_value(value.to_json_value()).ok()
+    }
+
+    pub fn remove(&mut self, id: &str) -> Option<Expert> {
+        let removed = self.get(id);
+        let experts = self.state.get_map("experts");
+        let _ = experts.delete(id);
+        removed
+    }
+
+    pub fn list(&self) -> Vec<Expert> {
+        let experts = self.state.get_map("experts");
+        experts
+            .values()
+            .filter_map(|value| value.as_value().and_then(|v| serde_json::from_value(v.to_json_value()).ok()))
+            .collect()
     }
 }

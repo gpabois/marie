@@ -8,18 +8,75 @@ use crate::{
 };
 */
 
+use bytemuck::{Pod, Zeroable};
 pub use context::Context;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{expert::ExpertId, hitl::HitlId, id::ID, model::model::ModelId, session::SessionId};
+use crate::{expert::ExpertId, id::ID, model::model::ModelId, session::{SessionId, state::hitl::HitlFrameId}};
 
 pub mod status;
 pub mod frame;
 pub mod context;
 pub mod role;
 
-#[derive(Clone, Copy)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[repr(C)]
 pub struct AgentId(SessionId, ID);
+
+impl AsRef<[u8]> for AgentId {
+    fn as_ref(&self) -> &[u8] {
+        bytemuck::bytes_of(self)
+    }
+}
+
+impl std::fmt::Display for AgentId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}/{}", self.0, self.1)
+    }
+}
+
+impl std::str::FromStr for AgentId {
+    type Err = anyhow::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format d'AgentId invalide : {s}"))?;
+        Ok(Self(session_part.parse()?, local_part.parse()?))
+    }
+}
+
+/// Sérialisé/désérialisé comme une chaîne (`Display`/`FromStr`, format
+/// `"session/local"`) plutôt que via le `derive` par défaut (qui produirait
+/// un tableau JSON `[session_id, id]`) — nécessaire pour pouvoir servir de
+/// clé de `HashMap` dans une structure sérialisée en JSON (voir
+/// `Session::frames`, `serde_json` n'accepte que des clés de type chaîne
+/// pour un objet), sur le même modèle que [`ID`](crate::id::ID) lui-même.
+impl Serialize for AgentId {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(&self.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for AgentId {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let repr = String::deserialize(deserializer)?;
+        repr.parse().map_err(serde::de::Error::custom)
+    }
+}
+
+impl AgentId {
+    pub fn new(session_id: SessionId, id: ID) -> Self {
+        Self(session_id, id)
+    }
+
+    pub fn session_id(&self) -> SessionId {
+        self.0
+    }
+
+    pub fn local_id(&self) -> ID {
+        self.1
+    }
+}
 
 pub struct Agent {
     id: AgentId,
@@ -47,7 +104,7 @@ pub enum AgentError {
 
 pub enum Yielding {
     YieldingAgents(Vec<AgentId>),
-    YieldingHitl(HitlId)
+    YieldingHitl(HitlFrameId)
 }
 
 /* 

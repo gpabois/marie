@@ -1,10 +1,10 @@
 use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use crate::{
-    job::Job, 
-    layer::Layer, 
-    network::{bootstrap::BootstrapClient, worker::{NS_WORKER, RPC_SCHEDULE_JOB, WorkerEvent}}, 
-    rpc::RpcServer, 
+    job::JobInstance,
+    layer::Layer,
+    network::{bootstrap::BootstrapClient, worker::{NS_WORKER, RPC_SCHEDULE_JOB, WorkerEvent}},
+    rpc::RpcServer,
     sink::SinkBoxExt
 };
 use futures::{FutureExt, SinkExt, StreamExt, channel::mpsc, future::BoxFuture};
@@ -15,7 +15,7 @@ use tokio::select;
 use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder)]
-pub struct WorkerServerArgs<Cx, B> where B: Fn(&Job) -> Cx + Send + Sync + 'static {
+pub struct WorkerServerArgs<Cx, B> where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static {
     bootstrap: BootstrapClient,
     rpc_server: RpcServer,
     job_context_builder: B
@@ -35,7 +35,7 @@ impl WorkerServerActor {
         mut args: WorkerServerArgs<Cx, B>
     ) -> WorkerServer<Cx>
         where
-            B: Fn(&Job) -> Cx + Send + Sync + 'static,
+            B: Fn(&JobInstance) -> Cx + Send + Sync + 'static,
             Cx: Send + 'static
     {
         args.bootstrap.register_to_namespaces([Namespace::from_static(NS_WORKER)]);
@@ -74,7 +74,7 @@ impl WorkerServerActor {
         let job_context_builder = args.job_context_builder;
 
         // enregistre la fonction execute
-        args.rpc_server.register(RPC_SCHEDULE_JOB, move |job: Job, _| {
+        args.rpc_server.register(RPC_SCHEDULE_JOB, move |job: JobInstance, _| {
             let Some(executor) = execs.lock().get(&job.name).cloned() else {
                 return std::future::ready(Err("aucun exécuteur pour le travail n'a été trouvé")).boxed();
             };
@@ -93,22 +93,22 @@ impl WorkerServerActor {
 
                 match result {
                     Ok(Ok(result)) => {
-                        evtx.send(WorkerEvent::JobDone { 
+                        let _ = evtx.send(WorkerEvent::JobDone { 
                             id: job.id, 
                             result: super::JobResult::Success(result)
-                        });
+                        }).await;
                     },
                     Ok(Err(error)) => {
-                        evtx.send(WorkerEvent::JobDone { 
+                        let _ = evtx.send(WorkerEvent::JobDone { 
                             id: job.id, 
                             result: super::JobResult::Failed(format!("le travail {}#{} a échoué: {error}", job.name, job.id)) 
-                        });
+                        }).await;
                     }
                     Err(_) => {
-                        evtx.send(WorkerEvent::JobDone { 
+                        let _ = evtx.send(WorkerEvent::JobDone { 
                             id: job.id, 
                             result: super::JobResult::Failed(format!("le travail {}#{} a paniqué", job.name, job.id)) 
-                        });
+                        }).await;
                     }
                 }
                 

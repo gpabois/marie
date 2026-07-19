@@ -2,12 +2,11 @@ use std::{collections::HashMap, sync::{Arc, Weak}};
 
 use futures::StreamExt;
 use parking_lot::Mutex;
-use serde::Serialize;
 use tokio::{select, sync::{self, mpsc, watch}};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    id, job::{Job, JobId, JobState}, layer::Layer, network::{bootstrap::{self, BootstrapClient}, worker::{NS_WORKER_WATCHDOG, RPC_WATCH_JOB, WorkerError, WorkerEvent}}, rpc::{RpcClient, Void, client::RpcCallArgs}
+    id, job::{Job, JobInstance, JobId, JobState}, layer::Layer, network::{bootstrap::{self, BootstrapClient}, worker::{NS_WORKER_WATCHDOG, RPC_WATCH_JOB, WorkerError, WorkerEvent}}, rpc::{RpcClient, Void, client::RpcCallArgs}
 };
 
 type JobTrackers = Arc<Mutex<HashMap<JobId, TrackedJobInfo>>>;
@@ -157,18 +156,20 @@ impl WorkerClient {
         Ok(tracker)
     }
 
-    /// Spawn a new job in the cluster
-    pub async fn spawn(&self, name: impl ToString, args: impl Serialize, ttl: Option<std::time::Duration>) -> Result<JobId, WorkerError> {
+    /// Spawn a new job in the cluster. Générique sur [`Job`] — sur le même
+    /// modèle que [`crate::rpc::RpcClient::invoke`] — pour que `J::NAME` soit
+    /// la seule source de vérité du nom envoyé au worker, sans risque de
+    /// diverger d'une constante dupliquée côté appelant.
+    pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobId, WorkerError> {
         let id = id::generate_id();
 
-        let job = Job {
+        let job = JobInstance {
             id,
-            name: name.to_string(),
-            args: serde_json::to_value(args).unwrap(),
+            name: J::NAME.to_string(),
+            args: serde_json::to_value(args.into()).unwrap(),
         };
 
         super::watchdog::watch_job(job, self.bootstrap.clone(), self.rpc.clone()).await?;
-    
 
         Ok(id)
     }

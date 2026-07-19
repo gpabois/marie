@@ -11,7 +11,7 @@ fn frame(session_id: ID, local_id: ID) -> AgentFrame {
     AgentFrame {
         session_id,
         id: local_id,
-        model_id: "gpt-test".to_string(),
+        model: "gpt-test".to_string(),
         status: AgentStatus::Initial,
         allowed_tools: vec!["search".to_string()],
         context: vec![ContextEntry { role: Role::User, content: "bonjour".to_string() }].into(),

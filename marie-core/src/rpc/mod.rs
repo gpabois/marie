@@ -4,12 +4,13 @@ pub mod register;
 pub mod layers;
 pub mod event;
 
+use async_trait::async_trait;
 pub use event::{RpcEvent, RpcEventKind};
 use libp2p::PeerId;
 
 use std::hash::Hash;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
 use crate::{id::ID, layer::{IntoService, Layer, LayerExt as _}, network::{actor::Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::register::RpcRegistry};
 
@@ -31,44 +32,49 @@ pub struct RpcCall {
 #[derive(Serialize, Deserialize)]
 pub enum RpcMessage {
     Call(RpcCall),
+    Ack(RpcAck),
     Reply(RpcReply)
 }
 
 impl RpcMessage {
     pub fn destination(&self) -> Option<PeerId> {
-        use RpcMessage::{Call, Reply};
+        use RpcMessage::{Call, Ack, Reply};
 
         match self {
             Call(call) => call.destination.clone(),
+            Ack(ack) => ack.destination.clone(),
             Reply(reply) => reply.destination.clone()
         }
     }
 
     pub fn source(&self) -> Option<PeerId> {
-        use RpcMessage::{Call, Reply};
+        use RpcMessage::{Call, Ack, Reply};
 
         match self {
             Call(call) => call.source.clone(),
+            Ack(ack) => ack.source.clone(),
             Reply(reply) => reply.source.clone()
         }
     }
 
     pub fn set_destination(&mut self, destination: Option<PeerId>) {
-        use RpcMessage::{Call, Reply};
-        
+        use RpcMessage::{Call, Ack, Reply};
+
         match self {
             Call(call) => call.destination = destination,
+            Ack(ack) => ack.destination = destination,
             Reply(reply) => reply.destination = destination
-        }   
+        }
     }
 
     pub fn set_source(&mut self, source: Option<PeerId>) {
-        use RpcMessage::{Call, Reply};
+        use RpcMessage::{Call, Ack, Reply};
 
         match self {
             Call(call) => call.source = source,
+            Ack(ack) => ack.source = source,
             Reply(reply) => reply.source = source
-        }   
+        }
     }
 }
 
@@ -92,6 +98,18 @@ pub struct RpcReply {
     result: RpcResult,
     destination: Option<PeerId>,
     source: Option<PeerId>
+}
+
+/// Accusé de réception envoyé par le serveur dès qu'un appel est pris en
+/// charge (exécuteur trouvé, tâche lancée) — avant même que le résultat ne
+/// soit disponible. Permet au client de distinguer un appel toujours en
+/// cours d'exécution d'un appel perdu, sans attendre la [`RpcReply`] finale
+/// — voir [`crate::rpc::client::RpcClient`].
+#[derive(Serialize, Deserialize)]
+pub struct RpcAck {
+    pub id: RpcCallId,
+    pub destination: Option<PeerId>,
+    pub source: Option<PeerId>
 }
 
 #[derive(Serialize, Deserialize)]
@@ -149,4 +167,23 @@ pub fn build_client(network: &Network) -> RpcClient {
         .chain::<FrameLayer, _>(())
         .chain::<RpcMuxLayer, _>(())
         .into_service(())
+}
+
+
+#[async_trait]
+pub trait RemoteProcedureCall: Sized {
+    const NAME: &'static str;
+    type Args: Serialize + DeserializeOwned;
+    type Return: Serialize + DeserializeOwned;
+
+    async fn execute(self, args: Self::Args, caller: PeerId) -> Self::Return;
+
+    fn register(self, rpc: &mut RpcServer) where Self: Clone + Send + Sync + 'static {
+        let func = move |args, caller| {
+            self.clone().execute(args, caller)
+        };
+
+        rpc.register(Self::NAME, func);
+
+    }
 }

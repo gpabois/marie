@@ -7,7 +7,7 @@ use tokio::{select, sync::mpsc};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    job::{Job, JobId, JobState}, 
+    job::{JobInstance, JobId, JobState},
     layer::Layer, 
     network::{bootstrap::{BootstrapClient, client::PeerSelection}, 
     worker::{JobResult, NS_WORKER, NS_WORKER_WATCHDOG, RPC_GET_STATE_JOB, RPC_SCHEDULE_JOB, RPC_WATCH_JOB, WorkerError, WorkerEvent}}, rpc::{RpcClient, RpcError, RpcServer, Void, client::RpcCallArgs}, sink::{BoxSink, SinkBoxExt}
@@ -19,7 +19,7 @@ type CommandEmitter = mpsc::UnboundedSender<Command>;
 
 struct JobTrackerInfo {
     id: JobId,
-    job: Job,
+    job: JobInstance,
     state: JobState,
     retry: u8,
     expires_at: Option<std::time::Duration>
@@ -115,7 +115,7 @@ impl WorkerWatchdogActor {
         });
         
         let trac = tracked.clone();
-        args.rpc_server.register(RPC_WATCH_JOB, move |job: Job, _| {
+        args.rpc_server.register(RPC_WATCH_JOB, move |job: JobInstance, _| {
             trac.lock().insert(job.id, JobTrackerInfo {
                 id: job.id,
                 state: JobState::Pending,
@@ -135,7 +135,7 @@ impl WorkerWatchdogActor {
     }
 }
 
-pub async fn watch_job(job: Job, bootstrap: BootstrapClient, rpc: RpcClient) -> Result<(), WorkerError> {
+pub async fn watch_job(job: JobInstance, bootstrap: BootstrapClient, rpc: RpcClient) -> Result<(), WorkerError> {
     let watchdog = bootstrap.select_peer(NS_WORKER_WATCHDOG, &job.id).ok_or(WorkerError::NoWatchdogFound)?;
     RpcCallArgs::builder()
         .name(RPC_WATCH_JOB)
