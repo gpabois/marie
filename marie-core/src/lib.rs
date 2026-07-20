@@ -18,6 +18,7 @@ pub mod pubsub;
 pub mod node;
 pub mod session;
 pub mod hitl;
+pub mod store;
 // pub mod persistency;
 
 pub use node::{Marie, MarieConfig, MarieHandle, NodeRole};

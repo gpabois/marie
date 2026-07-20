@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame},
-    id::ID,
-    session::state::{frame::{GraphFrame, GraphFrameId}, hitl::{HitlFrame, HitlFrameId}, orchestration::{OrchestrationFrame, OrchestrationFrameId}},
+    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, id::ID, session::state::{frame::{GraphFrame, GraphFrameId}, hitl::{HitlFrame, HitlFrameId}, orchestration::{OrchestrationFrame, OrchestrationFrameId}},
 };
 
 
@@ -115,10 +113,48 @@ pub struct SessionLog {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
-    pub frames: HashMap<AgentId, AgentFrame>,
+    pub frames: AgentFrameMap,
     pub graphs: HashMap<GraphFrameId, GraphFrame>,
     pub orchestrations: HashMap<OrchestrationFrameId, OrchestrationFrame>,
     pub hitls: HashMap<HitlFrameId, HitlFrame>,
     pub logs: Vec<SessionLog>,
     pub vars: HashMap<String, Value>,
+    /// Horodatage géré par le store (voir
+    /// `session::store::SessionStore::insert`), pas par l'appelant : toute
+    /// valeur posée ici avant un `insert` est ignorée, écrasée par l'heure
+    /// serveur au moment de l'écriture.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    /// Comme [`Self::created_at`], géré par le store — mis à jour à chaque
+    /// `insert`/`replace` (voir `session::store::SessionStore::replace`),
+    /// contrairement à `created_at` qu'un `replace` laisse intact.
+    pub last_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentFrameMap(HashMap<AgentId, AgentFrame>);
+
+impl From<HashMap<AgentId, AgentFrame>> for AgentFrameMap {
+    fn from(value: HashMap<AgentId, AgentFrame>) -> Self {
+        Self(value)
+    }
+}
+
+impl std::ops::Deref for AgentFrameMap {
+    type Target = HashMap<AgentId, AgentFrame>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for AgentFrameMap {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl AgentFrameMap {
+    pub fn iter_waiting_hitl(&self) -> impl Iterator<Item=&AgentFrame> {
+        self.values().filter(|frame| matches!(&frame.status, AgentStatus::Yielding(YieldStatus::WaitingHitl { .. })))
+    }
 }

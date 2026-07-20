@@ -24,7 +24,7 @@ impl ModelClient {
     pub async fn get(&self, id: impl Into<ModelId>) -> Result<super::model::Model, ModelError> {
         let id = id.into();
         
-        let sec = self.secret.for_peer(self.local_peer_id);
+        let sec = self.secret.for_peer(self.local_peer_id)?;
         let catalog = self.select_catalog(&id)?;
 
         self.rpc
@@ -36,7 +36,7 @@ impl ModelClient {
 
     /// Liste tout le catalogue de modèles connu du control plane.
     pub async fn list(&self) -> Result<Vec<Model>, ModelError> {
-        let sec = self.secret.for_peer(self.local_peer_id);
+        let sec = self.secret.for_peer(self.local_peer_id)?;
         let catalog = self.select_catalog(self.local_peer_id.to_bytes())?;
 
         let list = self.rpc
@@ -51,7 +51,7 @@ impl ModelClient {
 
     pub async fn insert(&self, model: Model) -> Result<(), ModelError> {
         let catalog = self.select_catalog(model.id())?;
-        let sec = self.secret.for_peer(catalog);
+        let sec = self.secret.for_peer(catalog)?;
 
         self.rpc.invoke::<InsertModel>(model.encrypt(&sec)?, [catalog]).await?;
 
@@ -61,7 +61,7 @@ impl ModelClient {
     /// Met à jour un modèle
     pub async fn update(&self, changeset: ModelChangeSet) -> Result<(), ModelError> {
         let catalog = self.select_catalog(&changeset.id)?;
-        let sec = self.secret.for_peer(catalog);
+        let sec = self.secret.for_peer(catalog)?;
 
         self.rpc.invoke::<UpdateModel>(changeset.encrypt(&sec)?, [catalog]).await?;
 

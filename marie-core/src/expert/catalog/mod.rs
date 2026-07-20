@@ -1,4 +1,4 @@
-// pub mod store;
+pub mod store;
 
 use std::borrow::Borrow;
 

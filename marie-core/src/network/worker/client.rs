@@ -28,7 +28,7 @@ struct TrackedJobInfo {
 }
 
 impl WorkerClientActor {
-    pub fn new(
+    pub fn create(
         layer: impl Layer<Send = WorkerEvent, Received = WorkerEvent>,
         args: WorkerClientArgs
     ) -> WorkerClient {

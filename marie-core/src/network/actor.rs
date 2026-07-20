@@ -1,4 +1,3 @@
-use futures::channel::oneshot;
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
 use libp2p::rendezvous::{self, Namespace, Ttl};

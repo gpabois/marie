@@ -2,17 +2,54 @@ use thiserror::Error;
 use tokio::{sync::watch, task::JoinHandle};
 use typed_builder::TypedBuilder;
 
-use crate::secret::SecretKey;
+use crate::secret::{KeyEpoch, SecretError, SecretKey, SecretManager};
+
+/// Une ou plusieurs master keys pour construire le [`SecretManager`] d'un
+/// nœud (voir [`MarieConfig::master_key`]) : [`Self::Single`] pour un
+/// cluster qui n'est pas en cours de rotation, [`Self::Multi`] pendant une
+/// rotation (voir le runbook de rotation sur [`SecretManager`] — plusieurs
+/// epochs coexistent le temps que chaque nœud du cluster ait basculé et que
+/// les données existantes aient été re-chiffrées). `marie-core` ne dicte
+/// volontairement aucun format CLI/fichier/env pour peupler [`Self::Multi`] :
+/// à l'intégrateur (binaire consommateur, ex. `marie-web-example`,
+/// `marie-axum`) de choisir comment il source/parse ses epochs dans son
+/// propre système de configuration.
+pub enum MasterKeys {
+    Single(SecretKey),
+    Multi { keys: Vec<(KeyEpoch, SecretKey)>, current_epoch: KeyEpoch },
+}
+
+/// Permet à tout appelant existant de continuer à passer une `SecretKey`
+/// brute à [`MarieConfig::builder`] sans changement (voir
+/// `#[builder(setter(into))]` sur [`MarieConfig::master_key`]).
+impl From<SecretKey> for MasterKeys {
+    fn from(key: SecretKey) -> Self {
+        Self::Single(key)
+    }
+}
+
+impl MasterKeys {
+    /// Construit le [`SecretManager`] correspondant (voir
+    /// [`SecretManager::new`]/[`SecretManager::with_epochs`]).
+    pub fn into_secret_manager(self) -> Result<SecretManager, SecretError> {
+        match self {
+            Self::Single(key) => Ok(SecretManager::new(&key)),
+            Self::Multi { keys, current_epoch } => SecretManager::with_epochs(keys, current_epoch),
+        }
+    }
+}
 
 /// Configuration d'un [`Marie`] : le secret maître du cluster (voir
-/// [`SecretManager::new`]), à partager entre tous les nœuds destinés à
-/// s'authentifier mutuellement. `master_key` doit être identique sur tous
-/// les nœuds d'un même cluster — c'est ce secret, jamais l'identité libp2p
+/// [`MasterKeys`]/[`SecretManager::new`]), à partager entre tous les nœuds
+/// destinés à s'authentifier mutuellement. `master_key` doit être identique
+/// sur tous les nœuds d'un même cluster (hors fenêtre de rotation, voir
+/// [`MasterKeys::Multi`]) — c'est ce secret, jamais l'identité libp2p
 /// (régénérée à chaque démarrage, voir `network::start_swarm`), qui les
 /// authentifie mutuellement.
 #[derive(TypedBuilder)]
 pub struct MarieConfig {
-    master_key: SecretKey,
+    #[builder(setter(into))]
+    master_key: MasterKeys,
 }
 
 /// Rôle sous lequel un nœud rejoint le cluster (voir [`NodeKind`]) : chaque

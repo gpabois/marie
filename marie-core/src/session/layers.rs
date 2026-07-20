@@ -29,22 +29,27 @@ impl<T> IntoService<SessionServer, SessionServerArgs> for T
 {
 
     fn into_service(self, args: SessionServerArgs) -> SessionServer {
-        SessionServerActor::new(self, args)
+        SessionServerActor::create(self, args)
     }
 }
 
 impl<L> LayerChain<L, ()> for SessionEventLayer where L: Layer<Send=PubSubMessage, Received=PubSubMessage> {
 
+    /// Chaque [`SessionEvent`] est publié deux fois — sur son topic dédié
+    /// (voir [`SessionEvent::topic`]) et sur le topic global (voir
+    /// [`SessionEvent::global_topic`]) — pour servir aussi bien un abonné
+    /// intéressé par une seule session qu'un abonné voulant tout le cycle de
+    /// vie sans connaître les identifiants de session à l'avance.
     fn chain(layer: L, _: ()) -> Self {
         let (tx, rx) = layer.split();
 
-        let tx = tx.with(|event: SessionEvent| {
-            std::future::ready(Ok(PubSubMessage {
-                id: String::default(),
-                source: None,
-                topic: event.topic(),
-                payload: serde_json::to_vec(&event).unwrap()
-            }))
+        let tx = tx.with_flat_map(|event: SessionEvent| {
+            let payload = serde_json::to_vec(&event).unwrap();
+
+            let dedicated = PubSubMessage { id: String::default(), source: None, topic: event.topic(), payload: payload.clone() };
+            let global = PubSubMessage { id: String::default(), source: None, topic: event.global_topic(), payload };
+
+            futures::stream::iter([Ok(dedicated), Ok(global)])
         }).boxed_sink();
 
         let rx = rx.filter_map(|msg| {

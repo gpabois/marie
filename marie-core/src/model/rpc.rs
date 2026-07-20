@@ -24,7 +24,7 @@ impl RemoteProcedureCall for GetModel {
     type Return = Option<EncryptedModel>;
 
     async fn execute(self, id: ModelId, caller: PeerId) -> Option<EncryptedModel> {
-        let sec = self.1.for_peer(caller);
+        let sec = self.1.for_peer(caller).unwrap();
         self.0.lock().get(id.borrow()).map(|model| model.encrypt(&sec).unwrap())
     }
 }
@@ -42,7 +42,7 @@ impl RemoteProcedureCall for ListModel {
     type Return = Vec<EncryptedModel>;
 
     async fn execute(self, _: Void, caller: PeerId) -> Vec<EncryptedModel> {
-        let sec = self.1.for_peer(caller);
+        let sec = self.1.for_peer(caller).unwrap();
         self.0.lock().list().into_iter().map(|model| model.encrypt(&sec).unwrap()).collect()
     }
 }
@@ -61,7 +61,7 @@ impl RemoteProcedureCall for InsertModel {
     type Return = Void;
 
     async fn execute(self, model: EncryptedModel, _: PeerId) -> Void {
-        let sec = self.1.for_peer(self.2);
+        let sec = self.1.for_peer(self.2).unwrap();
         let model = Model::decrypt(model, &sec).unwrap();
         self.0.lock().insert(model);
         Void
@@ -80,7 +80,7 @@ impl RemoteProcedureCall for UpdateModel {
     type Return = Void;
 
     async fn execute(self, changeset: EncryptedModelChangeSet, _: PeerId) -> Void {
-        let sec = self.1.for_peer(self.2);
+        let sec = self.1.for_peer(self.2).unwrap();
         let changeset = ModelChangeSet::decrypt(changeset, &sec).unwrap();
         self.0.lock().update(changeset);
         Void

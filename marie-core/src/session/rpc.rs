@@ -1,26 +1,19 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use libp2p::PeerId;
-use parking_lot::Mutex;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::{
-    rpc::{RemoteProcedureCall, Void},
-    session::{
-        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest,
-        catalog::SessionCatalog,
-        server::{SessionCommand, query_vars},
-        state::hitl::HitlFrameId,
+    rpc::{RemoteProcedureCall, Void}, session::{
+        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, server::{SessionCommand, query_vars}, state::hitl::HitlFrameId, store::{SessionStore, SessionStoreClient},
     },
 };
 
 /// Récupère une session du catalogue, ou `None` si inconnue de ce nœud —
 /// voir [`crate::session::client::SessionClient::get`].
 #[derive(Clone)]
-pub struct GetSession(pub(crate) Arc<Mutex<SessionCatalog>>);
+pub struct GetSession(pub(crate) SessionStoreClient);
 
 #[async_trait]
 impl RemoteProcedureCall for GetSession {
@@ -30,13 +23,13 @@ impl RemoteProcedureCall for GetSession {
     type Return = Option<Session>;
 
     async fn execute(self, id: SessionId, _: PeerId) -> Option<Session> {
-        self.0.lock().get(&id.to_string())
+        self.0.get(id).await.ok().flatten()
     }
 }
 
 /// Liste tout le catalogue de sessions connu de ce nœud.
 #[derive(Clone)]
-pub struct ListSession(pub(crate) Arc<Mutex<SessionCatalog>>);
+pub struct ListSession(pub(crate) SessionStoreClient);
 
 #[async_trait]
 impl RemoteProcedureCall for ListSession {
@@ -46,7 +39,7 @@ impl RemoteProcedureCall for ListSession {
     type Return = Vec<Session>;
 
     async fn execute(self, _: Void, _: PeerId) -> Vec<Session> {
-        self.0.lock().list()
+        self.0.list().await.unwrap_or_default()
     }
 }
 
@@ -86,7 +79,7 @@ impl RemoteProcedureCall for UpdateSession {
 
     async fn execute(self, session: Session, _: PeerId) -> Void {
         let (reply, rx) = oneshot::channel();
-        let _ = self.0.unbounded_send(SessionCommand::Update { session, reply });
+        let _ = self.0.unbounded_send(SessionCommand::Replace { session, reply });
         let _ = rx.await;
         Void
     }
@@ -135,7 +128,10 @@ impl RemoteProcedureCall for ReportAgentRun {
             response: request.response,
             reply,
         });
-        rx.await.unwrap_or_else(|_| Err("le serveur de sessions s'est arrêté".to_string()))
+        match rx.await {
+            Ok(result) => result.map_err(|e| e.to_string()),
+            Err(_) => Err("le serveur de sessions s'est arrêté".to_string()),
+        }
     }
 }
 
@@ -248,7 +244,7 @@ impl RemoteProcedureCall for InsertInLog {
 /// par [`crate::session::server::SessionCommand`], contrairement aux RPC
 /// mutantes ci-dessus.
 #[derive(Clone)]
-pub struct QueryVars(pub(crate) Arc<Mutex<SessionCatalog>>);
+pub struct QueryVars(pub(crate) SessionStoreClient);
 
 #[async_trait]
 impl RemoteProcedureCall for QueryVars {
@@ -258,7 +254,7 @@ impl RemoteProcedureCall for QueryVars {
     type Return = Result<Vec<Value>, String>;
 
     async fn execute(self, request: SessionVarsQueryRequest, _: PeerId) -> Result<Vec<Value>, String> {
-        query_vars(&self.0.lock(), request.session_id, &request.path)
+        query_vars(self.0, request.session_id, &request.path).await.map_err(|e| e.to_string())
     }
 }
 

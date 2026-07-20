@@ -21,7 +21,7 @@ impl<T> IntoService<WorkerClient, WorkerClientArgs> for T
 {
 
     fn into_service(self, args: WorkerClientArgs) -> WorkerClient {
-        WorkerClientActor::new(self, args)
+        WorkerClientActor::create(self, args)
     }
 }
 

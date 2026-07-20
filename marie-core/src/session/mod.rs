@@ -6,6 +6,7 @@ pub mod model;
 pub mod rpc;
 pub mod state;
 pub mod worker;
+pub mod store;
 
 use std::collections::HashMap;
 
@@ -36,10 +37,15 @@ pub use rpc::{
 
 pub const NS_SESSION: &str = "/marie/ns/sessions";
 
-/// Évènements de cycle de vie d'une session, diffusés sur
-/// [`SessionEvent::TOPIC_PREFIX`] — voir la doc de [`crate::network::worker::WorkerEvent`]
-/// pour la justification du schéma (Layer/gossip plutôt qu'un canal en
-/// mémoire), reproduit ici à l'identique pour `session::`. Seul
+/// Évènements de cycle de vie d'une session — voir la doc de
+/// [`crate::network::worker::WorkerEvent`] pour la justification du schéma
+/// (Layer/gossip plutôt qu'un canal en mémoire), repris ici pour `session::`
+/// à ceci près que le topic est dédié à chaque session (voir [`Self::topic`])
+/// plutôt qu'unique et global : contrairement aux jobs (`WorkerEvent`) ou
+/// aux tools (`ToolEvent`), un abonné n'est en général intéressé que par
+/// UNE session précise (ex. une passerelle qui relaie les évènements d'une
+/// session donnée à un client WebSocket) — un topic par session lui évite de
+/// recevoir puis filtrer le bruit de toutes les autres. Seul
 /// [`server::SessionServerActor`] en est l'émetteur : chaque mutation
 /// réussie du catalogue (voir [`server::SessionCommand`]) produit
 /// exactement l'évènement correspondant.
@@ -74,22 +80,71 @@ pub enum SessionEventError {
 }
 
 impl SessionEvent {
-    pub const TOPIC_PREFIX: &str = "marie/sessions/events";
+    /// Racine commune à tous les topics de session, dédiés comme global —
+    /// voir [`Self::is`].
+    pub const TOPIC_PREFIX: &str = "marie/sessions";
 
-    pub fn topic(&self) -> String {
+    /// Topic global, commun à toutes les sessions (voir [`Self::global_topic`])
+    /// — conservé en plus du topic dédié (voir [`Self::topic_prefix`]) pour
+    /// un abonné qui veut observer le cycle de vie de toutes les sessions
+    /// sans connaître leurs identifiants à l'avance (ex. un tableau de bord).
+    pub const GLOBAL_TOPIC_PREFIX: &str = "marie/sessions/events";
+
+    /// Session concernée par cet évènement — sert à calculer le topic dédié
+    /// (voir [`Self::topic_prefix`]/[`Self::topic`]).
+    pub fn session_id(&self) -> SessionId {
         match self {
-            SessionEvent::Created { .. } => format!("{0}/created", Self::TOPIC_PREFIX),
-            SessionEvent::Updated { .. } => format!("{0}/updated", Self::TOPIC_PREFIX),
-            SessionEvent::Removed { .. } => format!("{0}/removed", Self::TOPIC_PREFIX),
-            SessionEvent::FrameStatusChanged { .. } => format!("{0}/frame-status-changed", Self::TOPIC_PREFIX),
-            SessionEvent::GraphStatusChanged { .. } => format!("{0}/graph-status-changed", Self::TOPIC_PREFIX),
-            SessionEvent::OrchestrationStatusChanged { .. } => format!("{0}/orchestration-status-changed", Self::TOPIC_PREFIX),
-            SessionEvent::HitlStatusChanged { .. } => format!("{0}/hitl-status-changed", Self::TOPIC_PREFIX),
-            SessionEvent::LogAppended { .. } => format!("{0}/log-appended", Self::TOPIC_PREFIX),
-            SessionEvent::VarsPatched { .. } => format!("{0}/vars-patched", Self::TOPIC_PREFIX),
+            SessionEvent::Created { id } | SessionEvent::Updated { id } | SessionEvent::Removed { id } => *id,
+            SessionEvent::FrameStatusChanged { session_id, .. }
+            | SessionEvent::GraphStatusChanged { session_id, .. }
+            | SessionEvent::OrchestrationStatusChanged { session_id, .. }
+            | SessionEvent::HitlStatusChanged { session_id, .. }
+            | SessionEvent::LogAppended { session_id, .. }
+            | SessionEvent::VarsPatched { session_id } => *session_id,
         }
     }
 
+    /// Suffixe identifiant le type d'évènement, commun à [`Self::topic`] et
+    /// [`Self::global_topic`].
+    fn kind(&self) -> &'static str {
+        match self {
+            SessionEvent::Created { .. } => "created",
+            SessionEvent::Updated { .. } => "updated",
+            SessionEvent::Removed { .. } => "removed",
+            SessionEvent::FrameStatusChanged { .. } => "frame-status-changed",
+            SessionEvent::GraphStatusChanged { .. } => "graph-status-changed",
+            SessionEvent::OrchestrationStatusChanged { .. } => "orchestration-status-changed",
+            SessionEvent::HitlStatusChanged { .. } => "hitl-status-changed",
+            SessionEvent::LogAppended { .. } => "log-appended",
+            SessionEvent::VarsPatched { .. } => "vars-patched",
+        }
+    }
+
+    /// Topic dédié à la session de cet évènement (`marie/sessions/{id}/`,
+    /// suffixé par le type d'évènement dans [`Self::topic`]) — un abonné
+    /// n'ayant besoin que d'une session précise s'abonne uniquement à ce
+    /// préfixe-ci plutôt qu'au flux de toutes les sessions.
+    pub fn topic_prefix(&self) -> String {
+        format!("{0}/{1}", Self::TOPIC_PREFIX, self.session_id())
+    }
+
+    /// Topic effectivement publié pour cet évènement, dédié à sa session —
+    /// voir [`Self::topic_prefix`]. Publié en plus de, et non à la place de,
+    /// [`Self::global_topic`] (voir [`layers::SessionEventLayer`]).
+    pub fn topic(&self) -> String {
+        format!("{0}/{1}", self.topic_prefix(), self.kind())
+    }
+
+    /// Topic global (sans l'identifiant de session), sous
+    /// [`Self::GLOBAL_TOPIC_PREFIX`] — voir [`Self::topic`] pour le pendant
+    /// dédié à la session.
+    pub fn global_topic(&self) -> String {
+        format!("{0}/{1}", Self::GLOBAL_TOPIC_PREFIX, self.kind())
+    }
+
+    /// Reconnaît tout topic de session, dédié ou global — voir
+    /// [`Self::topic_prefix`]/[`Self::GLOBAL_TOPIC_PREFIX`] pour filtrer plus
+    /// précisément.
     pub fn is(msg: &PubSubMessage) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }

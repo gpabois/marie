@@ -1,3 +1,5 @@
+pub mod store;
+
 use std::borrow::Borrow;
 
 use loro::{LoroDoc, ToJson};

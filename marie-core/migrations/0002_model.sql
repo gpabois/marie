@@ -1,7 +1,7 @@
 -- Catalogue de modèles, copie locale chiffrée pour récupération à froid (voir
 -- model::catalog::store::ModelStore) — attributs décomposés en colonnes
 -- concrètes plutôt qu'un blob JSON opaque, à l'exception de `api_key_*` :
--- la clé API est déjà chiffrée (voir model::catalog::store::encrypt_for_storage),
+-- la clé API est déjà chiffrée (voir model::catalog::store::StoredModel::encrypt),
 -- jamais en clair sur disque, et son contenu chiffré n'a de sens que
 -- déchiffré — rien à décomposer de plus fin que ciphertext/nonce/algorithm.
 -- `kind` porte le discriminant de l'enum `Model`/`EncryptedModel` (une seule

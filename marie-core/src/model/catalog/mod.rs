@@ -1,4 +1,5 @@
-// pub mod store;
+pub mod store;
+pub mod rotate;
 use loro::{LoroDoc, LoroMap, ToJson};
 use serde::{Deserialize, Serialize};
 
