@@ -1,3 +1,6 @@
+use std::sync::Arc;
+
+use futures::channel::oneshot;
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
 use libp2p::rendezvous::{self, Namespace, Ttl};
@@ -16,7 +19,7 @@ use crate::{
 };
 
 pub enum NetworkCommand {
-    Listen,
+    Listen(oneshot::Sender<()>),
     SendFrame(Frame),
     Subscribe(gossipsub::IdentTopic),
     Publish {
@@ -136,6 +139,14 @@ impl NetworkLayer {
     }
 }
 
+struct Handle(mpsc::UnboundedSender<NetworkCommand>);
+
+impl Drop for Handle {
+    fn drop(&mut self) {
+        self.0.send(NetworkCommand::Shutdown);
+    }
+}
+
 #[derive(Clone)]
 pub struct Network {
     shutdown_signal: watch::Receiver<bool>,
@@ -144,6 +155,7 @@ pub struct Network {
     events: broadcast::Sender<NetworkEvent>,
     /// Identité libp2p de ce nœud — voir [`Self::decrypt_secret`].
     local_peer_id: PeerId,
+    handle: Arc<Handle>
 }
 
 impl Network {
@@ -155,11 +167,16 @@ impl Network {
     }
 
     /// Connecte le noeud au réseau
-    pub async fn listen(mut self) {
-        self.commands.send(NetworkCommand::Listen);
-        loop {
-            select! {
-                _ = self.shutdown_signal.changed() => break
+    pub async fn listen(mut self, keep_looping: bool) {
+        let (tx, rx) = oneshot::channel();
+        self.commands.send(NetworkCommand::Listen(tx));
+        rx.await;
+
+        if keep_looping {
+            loop {
+                select! {
+                    _ = self.shutdown_signal.changed() => break
+                }
             }
         }
     }
@@ -210,9 +227,8 @@ impl NetworkActor {
             commands: commands_tx.clone(),
             events: events_tx.clone(),
             local_peer_id,
+            handle: Arc::new(Handle(commands_tx.clone()))
         };
-
-
 
         let actor = NetworkActor {
             shutdown_signal: shutdown_subscribers,
@@ -241,9 +257,10 @@ impl NetworkActor {
             select! {
                 Some(cmd) = self.commands_rx.recv() => {
                     match cmd {
-                        Listen => {
+                        Listen(tx) => {
                             self.swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
                             info!("📡 Swarm [{}] initialisé. PeerID: {}", self.kind, self.swarm.local_peer_id());
+                            let _ = tx.send(());
                         }
                         SendFrame(mut frame) => {
                             // Le frame n'a pas de source, on va l'ajouter.

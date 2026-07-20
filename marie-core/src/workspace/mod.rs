@@ -1,63 +1,207 @@
 pub mod client;
-pub mod crdt;
-pub mod sync;
+pub mod layers;
+pub mod model;
+pub mod rpc;
+pub mod server;
+pub mod store;
 
-use std::collections::HashMap;
-
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use thiserror::Error;
 
-use crate::{agent::context::ContextEntry, id::ID, session::SessionId};
+use crate::layer::{IntoService as _, LayerExt as _};
+use crate::network::actor::Network;
+use crate::pubsub::{PubSubMessage, layers::PubSubLayer};
+use crate::session::SessionId;
 
-pub type WorkspaceId = ID;
+pub use model::{Workspace, WorkspaceId};
+pub use rpc::{AddSession, GetWorkspace, InsertWorkspace, ListWorkspace, PatchVars, QueryVars, RemoveSession, RemoveWorkspace};
 
-/// API métier d'un workspace : un espace de travail qui regroupe plusieurs
-/// [`SessionId`] (voir `ControlPlaneState::session_workspaces` côté control
-/// plane, qui répertorie l'appartenance — une session donnée n'appartient
-/// jamais qu'à un seul workspace à la fois) et porte un état partagé entre
-/// elles, sous deux formes complémentaires : un fil de [`ContextEntry`]
-/// (mémoire/discussion commune, même type que le contexte d'un frame) et un
-/// store clé-valeur libre (`String` -> [`Value`], sans structure imposée,
-/// à charge des agents de s'accorder sur ce qu'ils y rangent).
-///
-/// Comme [`crate::session::SessionApi`], délibérément indépendante de son
-/// mécanisme de synchronisation — voir [`crdt::YrsWorkspace`], seule
-/// implémentation à ce jour, sur exactement le même principe qu'un
-/// `session::crdt::YrsSession` (CRDT `yrs`, diffs échangés entre pairs via
-/// gossip plutôt que Raft : cet état est amené à être écrit en continu par
-/// plusieurs agents concurrents).
-pub trait WorkspaceApi {
-    /// Identifiant du workspace.
-    fn id(&self) -> WorkspaceId;
+pub const NS_WORKSPACE: &str = "/marie/ns/workspaces";
 
-    /// Rattache `session_id` au workspace — sans effet si elle en fait déjà
-    /// partie. Ne modifie pas l'appartenance côté control plane (voir
-    /// `RpcCall::SET_SESSION_WORKSPACE`) : c'est la responsabilité de
-    /// l'appelant (voir `workspace::client::WorkspaceClient::add_session`).
-    fn add_session(&mut self, session_id: SessionId) -> anyhow::Result<()>;
+/// Évènements de cycle de vie d'un workspace — même mécanique que
+/// [`crate::session::SessionEvent`] (voir sa doc pour la justification du
+/// schéma Layer/gossip) : chaque évènement est publié à la fois sur un topic
+/// dédié au workspace, préfixé par son identifiant (voir [`Self::topic`] —
+/// pour une passerelle qui relaie les évènements d'UN workspace à un client
+/// WebSocket), et sur un topic global (voir [`Self::global_topic`] — pour un
+/// abonné qui veut tout le cycle de vie sans connaître les identifiants à
+/// l'avance). Seul [`server::WorkspaceServerActor`] en est l'émetteur :
+/// chaque mutation réussie (voir [`server::WorkspaceCommand`]) produit
+/// exactement l'évènement correspondant.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum WorkspaceEvent {
+    Created { id: WorkspaceId },
+    Removed { id: WorkspaceId },
+    SessionAdded { workspace_id: WorkspaceId, session_id: SessionId },
+    SessionRemoved { workspace_id: WorkspaceId, session_id: SessionId },
+    VarsPatched { workspace_id: WorkspaceId },
+}
 
-    /// Détache `session_id` du workspace — sans effet si elle n'en fait pas
-    /// partie.
-    fn remove_session(&mut self, session_id: SessionId) -> anyhow::Result<()>;
+#[derive(Debug, Error)]
+pub enum WorkspaceEventError {
+    #[error("ce n'est pas un évènement de workspace")]
+    NotWorkspaceEvent,
+}
 
-    /// Sessions actuellement membres du workspace.
-    fn sessions(&self) -> Vec<SessionId>;
+impl WorkspaceEvent {
+    /// Racine commune à tous les topics de workspace, dédiés comme global —
+    /// voir [`Self::is`].
+    pub const TOPIC_PREFIX: &str = "marie/workspaces";
 
-    /// Ajoute une entrée au fil de contexte partagé du workspace.
-    fn push_context_entry(&mut self, entry: &ContextEntry) -> anyhow::Result<()>;
+    /// Topic global, commun à tous les workspaces (voir [`Self::global_topic`])
+    /// — conservé en plus du topic dédié (voir [`Self::topic_prefix`]) pour
+    /// un abonné qui veut observer le cycle de vie de tous les workspaces
+    /// sans connaître leurs identifiants à l'avance (ex. un tableau de bord).
+    pub const GLOBAL_TOPIC_PREFIX: &str = "marie/workspaces/events";
 
-    /// Fil de contexte partagé complet, dans l'ordre d'ajout.
-    fn context(&self) -> Vec<ContextEntry>;
+    /// Workspace concerné par cet évènement — sert à calculer le topic dédié
+    /// (voir [`Self::topic_prefix`]/[`Self::topic`]).
+    pub fn workspace_id(&self) -> WorkspaceId {
+        match self {
+            WorkspaceEvent::Created { id } | WorkspaceEvent::Removed { id } => *id,
+            WorkspaceEvent::SessionAdded { workspace_id, .. }
+            | WorkspaceEvent::SessionRemoved { workspace_id, .. }
+            | WorkspaceEvent::VarsPatched { workspace_id } => *workspace_id,
+        }
+    }
 
-    /// Définit (crée ou remplace) une valeur du store clé-valeur partagé.
-    fn set_value(&mut self, key: &str, value: &Value) -> anyhow::Result<()>;
+    /// Suffixe identifiant le type d'évènement, commun à [`Self::topic`] et
+    /// [`Self::global_topic`].
+    fn kind(&self) -> &'static str {
+        match self {
+            WorkspaceEvent::Created { .. } => "created",
+            WorkspaceEvent::Removed { .. } => "removed",
+            WorkspaceEvent::SessionAdded { .. } => "session-added",
+            WorkspaceEvent::SessionRemoved { .. } => "session-removed",
+            WorkspaceEvent::VarsPatched { .. } => "vars-patched",
+        }
+    }
 
-    /// Retire une clé du store clé-valeur partagé — sans effet si elle
-    /// n'existe pas.
-    fn remove_value(&mut self, key: &str) -> anyhow::Result<()>;
+    /// Topic dédié au workspace de cet évènement (`marie/workspaces/{id}/`,
+    /// suffixé par le type d'évènement dans [`Self::topic`]) — un abonné
+    /// n'ayant besoin que d'un workspace précis s'abonne uniquement à ce
+    /// préfixe-ci plutôt qu'au flux de tous les workspaces.
+    pub fn topic_prefix(&self) -> String {
+        format!("{0}/{1}", Self::TOPIC_PREFIX, self.workspace_id())
+    }
 
-    /// Valeur associée à `key` dans le store clé-valeur partagé, si connue.
-    fn value(&self, key: &str) -> Option<Value>;
+    /// Topic effectivement publié pour cet évènement, dédié à son workspace —
+    /// voir [`Self::topic_prefix`]. Publié en plus de, et non à la place de,
+    /// [`Self::global_topic`] (voir [`layers::WorkspaceEventLayer`]).
+    pub fn topic(&self) -> String {
+        format!("{0}/{1}", self.topic_prefix(), self.kind())
+    }
 
-    /// Snapshot complet du store clé-valeur partagé.
-    fn values(&self) -> HashMap<String, Value>;
+    /// Topic global (sans l'identifiant de workspace), sous
+    /// [`Self::GLOBAL_TOPIC_PREFIX`] — voir [`Self::topic`] pour le pendant
+    /// dédié au workspace.
+    pub fn global_topic(&self) -> String {
+        format!("{0}/{1}", Self::GLOBAL_TOPIC_PREFIX, self.kind())
+    }
+
+    /// Reconnaît tout topic de workspace, dédié ou global — voir
+    /// [`Self::topic_prefix`]/[`Self::GLOBAL_TOPIC_PREFIX`] pour filtrer plus
+    /// précisément.
+    pub fn is(msg: &PubSubMessage) -> bool {
+        msg.topic.starts_with(Self::TOPIC_PREFIX)
+    }
+}
+
+impl TryFrom<PubSubMessage> for WorkspaceEvent {
+    type Error = WorkspaceEventError;
+
+    fn try_from(value: PubSubMessage) -> Result<Self, Self::Error> {
+        use WorkspaceEventError::NotWorkspaceEvent;
+
+        if !Self::is(&value) { return Err(NotWorkspaceEvent) };
+
+        serde_json::from_slice(&value.payload).map_err(|_| NotWorkspaceEvent)
+    }
+}
+
+/// Construit un [`server::WorkspaceServer`] en chaînant le transport réseau
+/// brut (`NetworkCommand`/`NetworkEvent`) à travers `PubSubLayer` puis
+/// [`layers::WorkspaceEventLayer`] — miroir de
+/// [`crate::session::build_server`].
+pub fn build_server(net: &Network, args: server::WorkspaceServerArgs) -> server::WorkspaceServer {
+    net.transport()
+        .chain::<PubSubLayer, _>(())
+        .chain::<layers::WorkspaceEventLayer, _>(())
+        .into_service(args)
+}
+
+/// Charge utile de [`rpc::AddSession`]/[`rpc::RemoveSession`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceSessionRequest {
+    pub workspace_id: WorkspaceId,
+    pub session_id: SessionId,
+}
+
+/// Charge utile de [`rpc::QueryVars`] : `path` est une expression JSONPath
+/// (voir la crate `jsonpath_lib`), évaluée contre [`Workspace::vars`] traité
+/// comme un unique document JSON (ses clés de premier niveau devenant les
+/// champs de ce document, ex: `$.budget`) — même sémantique que
+/// [`crate::session::SessionVarsQueryRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceVarsQueryRequest {
+    pub workspace_id: WorkspaceId,
+    pub path: String,
+}
+
+/// Charge utile de [`rpc::PatchVars`] : remplace, dans [`Workspace::vars`]
+/// traité comme un document JSON unique (voir [`WorkspaceVarsQueryRequest`]),
+/// chaque nœud correspondant à `path` par `value`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceVarsPatchRequest {
+    pub workspace_id: WorkspaceId,
+    pub path: String,
+    pub value: Value,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::id::generate_id;
+
+    #[test]
+    fn topics_are_prefixed_by_workspace_id() {
+        let id = WorkspaceId::new(generate_id());
+        let event = WorkspaceEvent::Created { id };
+
+        assert_eq!(event.topic(), format!("marie/workspaces/{id}/created"));
+        assert_eq!(event.global_topic(), "marie/workspaces/events/created");
+    }
+
+    #[test]
+    fn event_roundtrips_through_pubsub_message() {
+        let id = WorkspaceId::new(generate_id());
+        let session_id = SessionId::new(generate_id());
+        let event = WorkspaceEvent::SessionAdded { workspace_id: id, session_id };
+
+        let msg = PubSubMessage {
+            id: String::default(),
+            source: None,
+            topic: event.topic(),
+            payload: serde_json::to_vec(&event).unwrap(),
+        };
+
+        let decoded = WorkspaceEvent::try_from(msg).unwrap();
+        assert!(matches!(
+            decoded,
+            WorkspaceEvent::SessionAdded { workspace_id, session_id: s } if workspace_id == id && s == session_id
+        ));
+    }
+
+    #[test]
+    fn foreign_topic_is_rejected() {
+        let msg = PubSubMessage {
+            id: String::default(),
+            source: None,
+            topic: "marie/sessions/whatever".to_string(),
+            payload: Vec::new(),
+        };
+
+        assert!(WorkspaceEvent::try_from(msg).is_err());
+    }
 }

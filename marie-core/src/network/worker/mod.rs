@@ -8,14 +8,14 @@ use crate::{
     create_swarm,  
     worker::{layers::WorkerEventLayer, 
     server::{WorkerServer, WorkerServerArgs},
-    watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}}, pubsub::{PubSubMessage, layers::PubSubLayer}, rpc::{self, RpcError}, secret::SecretKey,
+    watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}}, pubsub::{PubSubMessage, layers::PubSubLayer}, rpc::{self, RpcError},
     session::client::SessionClient, tools::{builtin::register_builtins_tools_executors, worker::{ToolWorkerArgs, ToolWorker}}
 };
 
 pub mod info;
 pub mod client;
 pub mod server;
-mod layers;
+pub(crate) mod layers;
 pub mod watchdog;
 
 pub const RPC_SCHEDULE_JOB: &str = "marie/worker/schedule";
@@ -95,7 +95,7 @@ pub struct WorkerArgs {
 pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
     use super::NodeKind::Worker;
 
-    let swarm = create_swarm(Worker).await?;
+    let swarm = create_swarm(Worker)?;
     let local_peer_id = *swarm.local_peer_id();
     
     let net = NetworkActor::new(swarm, Worker);
@@ -115,7 +115,7 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
     let tools = register_builtins_tools_executors(args.tools, sessions.clone());
     ToolWorker::new(tools, sessions).register(&mut worker_server);
 
-    net.clone().listen().await;
+    net.clone().listen(true).await;
 
     Ok(())
 }
@@ -124,7 +124,7 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
 pub async fn start_watchdog() -> Result<(), anyhow::Error> {
     use super::NodeKind::WorkerWatchdog;
 
-    let swarm = create_swarm(WorkerWatchdog).await?;
+    let swarm = create_swarm(WorkerWatchdog)?;
     let local_peer_id = *swarm.local_peer_id();
 
     let net = NetworkActor::new(swarm, WorkerWatchdog);
@@ -140,7 +140,7 @@ pub async fn start_watchdog() -> Result<(), anyhow::Error> {
 
     let _watchdog = build_watchdog(&net, args);
 
-    net.listen().await;
+    net.listen(true).await;
 
     Ok(())
 }
@@ -148,6 +148,18 @@ pub async fn start_watchdog() -> Result<(), anyhow::Error> {
 pub fn build_server<Cx, B>(net: &Network, args: WorkerServerArgs<Cx, B>) -> WorkerServer<Cx>
 where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static, Cx: Send + 'static
 {
+    net.transport()
+        .chain::<PubSubLayer, _>(())
+        .chain::<WorkerEventLayer, _>(())
+        .into_service(args)
+}
+
+/// Construit un [`WorkerClient`](client::WorkerClient) branché sur `net` —
+/// pendant de [`build_server`] pour tout nœud qui a besoin de soumettre des
+/// jobs sans être lui-même un worker (ex. `network::catalog::start_catalog`,
+/// dont le serveur de sessions resoumet les jobs débloqués et dont
+/// `ExecuteTool` dispatche les appels de tools).
+pub fn build_client(net: &Network, args: client::WorkerClientArgs) -> client::WorkerClient {
     net.transport()
         .chain::<PubSubLayer, _>(())
         .chain::<WorkerEventLayer, _>(())

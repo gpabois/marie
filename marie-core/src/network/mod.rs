@@ -4,6 +4,7 @@ use tracing::info;
 use crate::network::{peer::NodeKind};
 
 pub mod peer;
+pub mod catalog;
 pub mod worker;
 pub mod actor;
 pub mod persistency;
@@ -22,7 +23,7 @@ pub struct MarieBehaviour {
 
 pub type MarieSwarm = Swarm<MarieBehaviour>;
 
-pub async fn create_swarm(kind: NodeKind) -> Result<Swarm<MarieBehaviour>, anyhow::Error> {
+pub fn create_swarm(kind: NodeKind) -> Result<Swarm<MarieBehaviour>, anyhow::Error> {
     let swarm = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(libp2p::tcp::Config::default(), libp2p::noise::Config::new, libp2p::yamux::Config::default)?

@@ -9,6 +9,13 @@ pub struct PeerNode {
 pub enum NodeKind {
     /// Noeud dédié à traiter des jobs
     Worker,
+    /// Nœud qui héberge l'ensemble des catalogues du cluster (modèles, tools,
+    /// experts, sessions, workspaces) et leur persistance Postgres — voir
+    /// `network::catalog::start_catalog`. Regroupés dans un même nœud pour
+    /// l'instant ; chaque domaine restant un serveur indépendant enregistré
+    /// sur son propre namespace, les éclater en nœuds dédiés plus tard ne
+    /// demandera que de nouvelles fonctions `start_*` plus fines.
+    Catalog,
     /// Noeud dédié à surveiller que les jobs arrivent à terme
     WorkerWatchdog,
     /// Nœud dédié à la persistance durable de structures de données du
