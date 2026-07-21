@@ -30,7 +30,7 @@ impl Client {
         let swarm = create_swarm(NodeKind::Client)?;
         let local_peer_id = *swarm.local_peer_id();
 
-        let network = NetworkActor::new(swarm, NodeKind::Client);
+        let network = NetworkActor::create(swarm, NodeKind::Client);
         let secret = SecretManager::with_epochs(args.epochs, args.current_epoch)?;
 
         let rpc = rpc::build_client(&network);
@@ -78,5 +78,15 @@ impl Client {
     pub async fn connect(&self) -> anyhow::Result<()> {
         self.network.clone().listen(false).await;
         Ok(())
+    }
+
+    /// Accès à la couche réseau brute du client — notamment pour construire
+    /// un transport `Layer<Send = NetworkCommand, Received = NetworkEvent>`
+    /// (voir [`Network::transport`]) ou s'abonner directement à des topics
+    /// gossipsub (voir [`Network::subscribe`]), par exemple depuis
+    /// `marie_gateway::MarieGatewayActor::create`. `Network` est `Clone` (de
+    /// simples `Sender`/`Arc` internes), ce clone est donc peu coûteux.
+    pub fn network(&self) -> Network {
+        self.network.clone()
     }
 }

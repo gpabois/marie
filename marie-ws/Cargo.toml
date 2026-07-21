@@ -1,0 +1,23 @@
+[package]
+name = "marie-ws"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+marie-core = { path = "../marie-core", default-features = false, features = ["client"] }
+axum = { workspace = true, features = ["ws"], optional = true }
+tokio = { workspace = true }
+tokio-stream = { workspace = true, features = ["sync"] }
+anyhow.workspace = true
+gloo-net = { workspace = true, optional = true }
+futures-util.workspace = true
+futures.workspace = true
+tracing = "0.1"
+
+[features]
+# Terminaison serveur d'une connexion WebSocket via `axum` (voir `src/axum/`).
+axum = ["dep:axum"]
+# Client WebSocket navigateur/wasm via `gloo-net` (voir `src/browser.rs`).
+browser = ["dep:gloo-net"]

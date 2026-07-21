@@ -1,3 +1,4 @@
+#[cfg(feature = "catalog")]
 pub mod store;
 
 use std::borrow::Borrow;

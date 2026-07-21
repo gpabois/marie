@@ -14,6 +14,7 @@ use crate::{agent::AgentId, rpc::RpcError, secret::SecretError, tools::{Tool as 
 pub mod catalog;
 pub mod model;
 pub mod client;
+#[cfg(feature = "catalog")]
 pub mod server;
 pub mod rpc;
 

@@ -1,14 +1,26 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use typed_builder::TypedBuilder;
 
 use crate::{
-    job::{JobInstance, JobId, JobState}, layer::{IntoService as _, LayerExt as _}, network::{actor::{Network, NetworkActor},
-    bootstrap::{self, client::BootstrapArgs}, 
-    create_swarm,  
-    worker::{layers::WorkerEventLayer, 
-    server::{WorkerServer, WorkerServerArgs},
-    watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}}, pubsub::{PubSubMessage, layers::PubSubLayer}, rpc::{self, RpcError},
+    job::{JobId, JobState},
+    layer::{IntoService as _, LayerExt as _},
+    network::{actor::Network, worker::layers::WorkerEventLayer},
+    pubsub::{PubSubMessage, layers::PubSubLayer},
+    rpc::RpcError,
+};
+
+#[cfg(feature = "worker")]
+use typed_builder::TypedBuilder;
+
+#[cfg(feature = "worker")]
+use crate::{
+    job::JobInstance,
+    network::{actor::NetworkActor,
+    bootstrap::{self, client::BootstrapArgs},
+    create_swarm,
+    worker::{server::{WorkerServer, WorkerServerArgs},
+    watchdog::{WorkerWatchdog, WorkerWatchdogArgs}}},
+    rpc,
     session::client::SessionClient, tools::{builtin::register_builtins_tools_executors, worker::{ToolWorkerArgs, ToolWorker}}
 };
 
@@ -87,18 +99,20 @@ impl WorkerEvent {
 }
 
 
+#[cfg(feature = "worker")]
 #[derive(TypedBuilder)]
 pub struct WorkerArgs {
     tools: ToolWorkerArgs
 }
 
+#[cfg(feature = "worker")]
 pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
     use super::NodeKind::Worker;
 
     let swarm = create_swarm(Worker)?;
     let local_peer_id = *swarm.local_peer_id();
     
-    let net = NetworkActor::new(swarm, Worker);
+    let net = NetworkActor::create(swarm, Worker);
 
     // on démarre un client bootstrap qui va s'enregistrer sur le namespace des workers
     let bootstrap = bootstrap::build_client(&net, BootstrapArgs::builder().local_peer_id(local_peer_id).build());
@@ -121,13 +135,14 @@ pub async fn start_worker(args: WorkerArgs) -> Result<(), anyhow::Error> {
 }
 
 /// Démarre un worker watchdog
+#[cfg(feature = "worker")]
 pub async fn start_watchdog() -> Result<(), anyhow::Error> {
     use super::NodeKind::WorkerWatchdog;
 
     let swarm = create_swarm(WorkerWatchdog)?;
     let local_peer_id = *swarm.local_peer_id();
 
-    let net = NetworkActor::new(swarm, WorkerWatchdog);
+    let net = NetworkActor::create(swarm, WorkerWatchdog);
 
     // on démarre un client bootstrap qui va s'enregistrer sur le namespace des workers watchdogs
     let bootstrap = bootstrap::build_client(&net, BootstrapArgs::builder().local_peer_id(local_peer_id).build());
@@ -145,6 +160,7 @@ pub async fn start_watchdog() -> Result<(), anyhow::Error> {
     Ok(())
 }
 
+#[cfg(feature = "worker")]
 pub fn build_server<Cx, B>(net: &Network, args: WorkerServerArgs<Cx, B>) -> WorkerServer<Cx>
 where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static, Cx: Send + 'static
 {
@@ -166,6 +182,7 @@ pub fn build_client(net: &Network, args: client::WorkerClientArgs) -> client::Wo
         .into_service(args)
 }
 
+#[cfg(feature = "worker")]
 pub fn build_watchdog(net: &Network, args: WorkerWatchdogArgs) -> WorkerWatchdog {
     net.transport()
         .chain::<PubSubLayer, _>(())

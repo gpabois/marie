@@ -5,7 +5,7 @@ edition = "2024"
 publish = false
 
 [dependencies]
-marie-core = { path = "../marie-core" }
+marie-core = { path = "../marie-core", features = ["catalog"] }
 
 [dev-dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] }

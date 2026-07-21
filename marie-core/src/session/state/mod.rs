@@ -6,7 +6,10 @@ pub mod frame;
 pub mod hitl;
 pub mod orchestration;
 pub mod rpc;
+#[cfg(feature = "catalog")]
 pub mod server;
+// Référencé directement par `session::server` (désormais ungated, voir sa
+// doc) via `RunGraphStep` — ne peut pas rester derrière `catalog`.
 pub mod worker;
 
 use std::collections::HashMap;

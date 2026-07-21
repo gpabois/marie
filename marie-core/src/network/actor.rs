@@ -169,15 +169,11 @@ impl Network {
     /// Connecte le noeud au réseau
     pub async fn listen(mut self, keep_looping: bool) {
         let (tx, rx) = oneshot::channel();
-        self.commands.send(NetworkCommand::Listen(tx));
-        rx.await;
+        let _ = self.commands.send(NetworkCommand::Listen(tx));
+        let _ = rx.await;
 
         if keep_looping {
-            loop {
-                select! {
-                    _ = self.shutdown_signal.changed() => break
-                }
-            }
+            let _ = self.shutdown_signal.changed().await;
         }
     }
 
@@ -214,7 +210,7 @@ pub struct NetworkActor {
 
 impl NetworkActor {
     #[must_use]
-    pub fn new(swarm: MarieSwarm, kind: NodeKind) -> Network {
+    pub fn create(swarm: MarieSwarm, kind: NodeKind) -> Network {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
         let (shutdown_subscribers, shutdown_signal) = watch::channel(false);
@@ -308,18 +304,13 @@ impl NetworkActor {
                             frame.source = Some(peer);
                             let _ = self.events_tx.send(NetworkEvent::ReceivedFrame(frame));
                         },
-                        Behaviour(PubSub(msg)) => {
-                            match msg {
-                                gossipsub::Event::Message { propagation_source, message_id, message } => {
-                                    let _ = self.events_tx.send(NetworkEvent::PubSubReceived { 
-                                        id: message_id.to_string(),
-                                        topic: message.topic.to_string(), 
-                                        data: message.data, 
-                                        source: propagation_source 
-                                    });
-                                },
-                                _ => {}
-                            }
+                        Behaviour(PubSub(gossipsub::Event::Message { propagation_source, message_id, message })) => {
+                            let _ = self.events_tx.send(NetworkEvent::PubSubReceived { 
+                                id: message_id.to_string(),
+                                topic: message.topic.to_string(), 
+                                data: message.data, 
+                                source: propagation_source 
+                            });
                         },
                         Behaviour(Mdns(mdns::Event::Discovered(discovered))) => {
                             let non_connected = discovered

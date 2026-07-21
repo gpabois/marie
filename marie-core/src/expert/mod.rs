@@ -2,6 +2,7 @@ pub mod catalog;
 pub mod client;
 pub mod model;
 pub mod rpc;
+#[cfg(feature = "catalog")]
 pub mod server;
 
 pub use model::{ExpertId, Expert};

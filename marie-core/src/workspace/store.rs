@@ -1,17 +1,21 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
-use sqlx::Row as _;
-use sqlx::postgres::PgRow;
-use sqlx::types::Json;
 use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 
-use crate::{
-    store::PgStore,
-    workspace::{Workspace, WorkspaceId},
-};
+use crate::workspace::{Workspace, WorkspaceId};
+
+#[cfg(feature = "catalog")]
+use crate::store::PgStore;
+#[cfg(feature = "catalog")]
+use chrono::{DateTime, Utc};
+#[cfg(feature = "catalog")]
+use sqlx::Row as _;
+#[cfg(feature = "catalog")]
+use sqlx::postgres::PgRow;
+#[cfg(feature = "catalog")]
+use sqlx::types::Json;
 
 enum Command {
     GetWorkspace(WorkspaceId, oneshot::Sender<Result<Option<Workspace>, anyhow::Error>>),
@@ -132,6 +136,7 @@ pub trait WorkspaceStore: Send + Sync + Clone {
 /// de workspace (document CRDT `yrs`), ce `Workspace`-ci est un
 /// enregistrement classique remplacé en bloc à chaque mutation, donc
 /// décomposable colonne à colonne comme `session`/`model`/`tool`.
+#[cfg(feature = "catalog")]
 fn decode_row(row: PgRow) -> anyhow::Result<Workspace> {
     Ok(Workspace {
         id: row.try_get::<String, _>("id")?.parse()?,
@@ -142,6 +147,7 @@ fn decode_row(row: PgRow) -> anyhow::Result<Workspace> {
     })
 }
 
+#[cfg(feature = "catalog")]
 #[async_trait]
 impl WorkspaceStore for PgStore {
     async fn list(self) -> anyhow::Result<Vec<Workspace>> {

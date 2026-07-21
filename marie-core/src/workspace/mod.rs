@@ -1,7 +1,12 @@
 pub mod client;
+#[cfg(feature = "catalog")]
 pub mod layers;
 pub mod model;
 pub mod rpc;
+// `server::WorkspaceCommand` est référencé directement par les RPC mutantes
+// de `rpc.rs` (voir ex. `InsertWorkspace`), lui-même requis par
+// `client::WorkspaceClient` — impossible de gater derrière `catalog`, voir
+// la même remarque sur `crate::session::server`.
 pub mod server;
 pub mod store;
 
@@ -9,9 +14,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::layer::{IntoService as _, LayerExt as _};
-use crate::network::actor::Network;
-use crate::pubsub::{PubSubMessage, layers::PubSubLayer};
+use crate::pubsub::PubSubMessage;
 use crate::session::SessionId;
 
 pub use model::{Workspace, WorkspaceId};
@@ -106,6 +109,24 @@ impl WorkspaceEvent {
     pub fn is(msg: &PubSubMessage) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }
+
+    /// Tous les suffixes de type d'évènement (voir [`Self::kind`]), dans le
+    /// même ordre que les variantes de l'enum — même rôle que
+    /// [`crate::session::SessionEvent::KINDS`], voir sa doc pour la limite
+    /// (synchronisation manuelle avec [`Self::kind`]).
+    pub const KINDS: [&'static str; 5] = [
+        "created",
+        "removed",
+        "session-added",
+        "session-removed",
+        "vars-patched",
+    ];
+
+    /// Tous les topics globaux (un par type d'évènement, voir
+    /// [`Self::KINDS`]/[`Self::global_topic`]).
+    pub fn all_global_topics() -> Vec<String> {
+        Self::KINDS.iter().map(|kind| format!("{}/{kind}", Self::GLOBAL_TOPIC_PREFIX)).collect()
+    }
 }
 
 impl TryFrom<PubSubMessage> for WorkspaceEvent {
@@ -124,7 +145,11 @@ impl TryFrom<PubSubMessage> for WorkspaceEvent {
 /// brut (`NetworkCommand`/`NetworkEvent`) à travers `PubSubLayer` puis
 /// [`layers::WorkspaceEventLayer`] — miroir de
 /// [`crate::session::build_server`].
-pub fn build_server(net: &Network, args: server::WorkspaceServerArgs) -> server::WorkspaceServer {
+#[cfg(feature = "catalog")]
+pub fn build_server(net: &crate::network::actor::Network, args: server::WorkspaceServerArgs) -> server::WorkspaceServer {
+    use crate::layer::{IntoService as _, LayerExt as _};
+    use crate::pubsub::layers::PubSubLayer;
+
     net.transport()
         .chain::<PubSubLayer, _>(())
         .chain::<layers::WorkspaceEventLayer, _>(())
@@ -203,5 +228,12 @@ mod tests {
         };
 
         assert!(WorkspaceEvent::try_from(msg).is_err());
+    }
+
+    #[test]
+    fn all_global_topics_has_one_per_kind() {
+        let topics = WorkspaceEvent::all_global_topics();
+        assert_eq!(topics.len(), WorkspaceEvent::KINDS.len());
+        assert!(topics.iter().all(|t| t.starts_with(WorkspaceEvent::GLOBAL_TOPIC_PREFIX)));
     }
 }

@@ -55,7 +55,7 @@ pub async fn start_catalog(args: CatalogArgs) -> Result<(), anyhow::Error> {
     let swarm = create_swarm(Catalog)?;
     let local_peer_id = *swarm.local_peer_id();
 
-    let net = NetworkActor::new(swarm, Catalog);
+    let net = NetworkActor::create(swarm, Catalog);
 
     run_migrations(args.store.pool()).await?;
 

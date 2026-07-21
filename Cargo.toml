@@ -1,13 +1,15 @@
 [workspace]
 resolver = "2"
 members = [
+    "marie", 
     "marie-core", 
     "marie-test", 
-    "marie", 
     "marie-leptos", 
     "marie-axum", 
-    "marie-web-example"
-, "marie-gateway"]
+    "marie-web-example", 
+    "marie-gateway", 
+    "marie-ws"
+]
 
 [workspace.dependencies]
 serde = "1.0.228"
@@ -17,3 +19,6 @@ tokio = { version = "1.52.3", features = ["sync"] }
 tokio-stream = { version = "0.1.18", features = ["sync"] }
 async-stream = "0.3.6"
 futures = "0.3"
+axum = { version = "0.8", features = ["ws"] }
+anyhow = "1.0.102"
+gloo-net = "0.7.0"

@@ -1,21 +1,28 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use tokio::sync::{mpsc, oneshot};
-use sqlx::Row as _;
-use sqlx::postgres::PgRow;
-use sqlx::types::Json;
 use tokio::select;
 
+use crate::session::{Session, SessionId};
+
+#[cfg(feature = "catalog")]
 use crate::{
     agent::{AgentId, frame::AgentFrame},
     session::{
-        Session, SessionId, SessionLog,
+        SessionLog,
         state::{frame::GraphFrame, hitl::HitlFrame, orchestration::OrchestrationFrame},
     },
     store::PgStore,
 };
+#[cfg(feature = "catalog")]
+use chrono::{DateTime, Utc};
+#[cfg(feature = "catalog")]
+use sqlx::Row as _;
+#[cfg(feature = "catalog")]
+use sqlx::postgres::PgRow;
+#[cfg(feature = "catalog")]
+use sqlx::types::Json;
 
 
 enum Command {
@@ -144,6 +151,7 @@ pub trait SessionStore: Send + Sync + Clone {
 /// `persistency::session`), cette `Session`-ci est un enregistrement
 /// classique remplacé en bloc à chaque mutation, donc décomposable colonne à
 /// colonne comme `expert`/`model`/`tool`.
+#[cfg(feature = "catalog")]
 fn decode_row(row: PgRow) -> anyhow::Result<Session> {
     Ok(Session {
         id: row.try_get::<String, _>("id")?.parse()?,
@@ -158,6 +166,7 @@ fn decode_row(row: PgRow) -> anyhow::Result<Session> {
     })
 }
 
+#[cfg(feature = "catalog")]
 #[async_trait]
 impl SessionStore for PgStore {
     async fn list(self) -> anyhow::Result<Vec<Session>> {

@@ -1,6 +1,8 @@
 pub mod catalog;
 pub mod client;
+#[cfg(feature = "catalog")]
 pub mod server;
+#[cfg(feature = "catalog")]
 pub mod layers;
 pub(crate) mod worker;
 pub mod builtin;

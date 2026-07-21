@@ -1,6 +1,13 @@
+#[cfg(feature = "catalog")]
 pub mod catalog;
 pub mod client;
+#[cfg(feature = "catalog")]
 pub mod layers;
+// `server::SessionCommand` est référencé directement par les RPC mutantes de
+// `rpc.rs` (voir ex. `InsertSession`), lui-même requis par `client::SessionClient`
+// (base commune à toutes les features) — impossible de gater ce module
+// derrière `catalog` sans casser un build client seul, même principe que
+// `network::worker::server` (voir sa doc).
 pub mod server;
 pub mod model;
 pub mod rpc;
@@ -17,9 +24,7 @@ use thiserror::Error;
 use crate::agent::AgentId;
 use crate::agent::status::{AgentResponse, AgentStatus};
 use crate::hitl::{Answer, Question};
-use crate::layer::{IntoService as _, LayerExt as _};
-use crate::network::actor::Network;
-use crate::pubsub::{PubSubMessage, layers::PubSubLayer};
+use crate::pubsub::PubSubMessage;
 use crate::session::state::{
     StateGraph,
     executable::{OrchestrationStrategy, ResolvedChildTask},
@@ -148,6 +153,32 @@ impl SessionEvent {
     pub fn is(msg: &PubSubMessage) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }
+
+    /// Tous les suffixes de type d'évènement (voir [`Self::kind`]), dans le
+    /// même ordre que les variantes de l'enum — permet à un abonné externe
+    /// (ex. `marie_gateway::MarieGatewayActor`) de s'abonner à
+    /// [`Self::global_topic`] pour chaque type d'évènement sans dupliquer à
+    /// la main le match (privé) de [`Self::kind`]. À tenir à jour
+    /// manuellement en même temps que [`Self::kind`] si une variante est
+    /// ajoutée/retirée — rien ne garantit la synchronisation à la
+    /// compilation, voir le test `all_global_topics_has_one_per_kind`.
+    pub const KINDS: [&'static str; 9] = [
+        "created",
+        "updated",
+        "removed",
+        "frame-status-changed",
+        "graph-status-changed",
+        "orchestration-status-changed",
+        "hitl-status-changed",
+        "log-appended",
+        "vars-patched",
+    ];
+
+    /// Tous les topics globaux (un par type d'évènement, voir
+    /// [`Self::KINDS`]/[`Self::global_topic`]).
+    pub fn all_global_topics() -> Vec<String> {
+        Self::KINDS.iter().map(|kind| format!("{}/{kind}", Self::GLOBAL_TOPIC_PREFIX)).collect()
+    }
 }
 
 impl TryFrom<PubSubMessage> for SessionEvent {
@@ -166,7 +197,11 @@ impl TryFrom<PubSubMessage> for SessionEvent {
 /// brut (`NetworkCommand`/`NetworkEvent`) à travers `PubSubLayer` puis
 /// [`layers::SessionEventLayer`] — mirroir de
 /// [`crate::network::worker::build_server`].
-pub fn build_server(net: &Network, args: server::SessionServerArgs) -> server::SessionServer {
+#[cfg(feature = "catalog")]
+pub fn build_server(net: &crate::network::actor::Network, args: server::SessionServerArgs) -> server::SessionServer {
+    use crate::layer::{IntoService as _, LayerExt as _};
+    use crate::pubsub::layers::PubSubLayer;
+
     net.transport()
         .chain::<PubSubLayer, _>(())
         .chain::<layers::SessionEventLayer, _>(())
@@ -315,4 +350,16 @@ pub struct SessionReportUserInputRequest {
     pub session_id: SessionId,
     pub hitl_id: Option<HitlFrameId>,
     pub answers: HashMap<String, Answer>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_global_topics_has_one_per_kind() {
+        let topics = SessionEvent::all_global_topics();
+        assert_eq!(topics.len(), SessionEvent::KINDS.len());
+        assert!(topics.iter().all(|t| t.starts_with(SessionEvent::GLOBAL_TOPIC_PREFIX)));
+    }
 }

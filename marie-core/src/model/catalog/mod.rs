@@ -1,4 +1,6 @@
+#[cfg(feature = "catalog")]
 pub mod store;
+#[cfg(feature = "catalog")]
 pub mod rotate;
 use loro::{LoroDoc, LoroMap, ToJson};
 use serde::{Deserialize, Serialize};

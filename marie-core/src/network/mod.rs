@@ -4,6 +4,7 @@ use tracing::info;
 use crate::network::{peer::NodeKind};
 
 pub mod peer;
+#[cfg(feature = "catalog")]
 pub mod catalog;
 pub mod worker;
 pub mod actor;

@@ -4,4 +4,27 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-marie-core = { path = "../marie-core" }
+marie-core = { path = "../marie-core", default-features = false }
+marie-gateway = { path = "../marie-gateway", optional = true }
+marie-ws = { path = "../marie-ws", optional = true }
+marie-leptos = { path = "../marie-leptos", optional = true }
+
+[features]
+default = ["client"]
+# Connexion au réseau seule — voir les features du même nom dans marie-core.
+client = ["marie-core/client"]
+worker = ["marie-core/worker"]
+catalog = ["marie-core/catalog"]
+node = ["marie-core/node"]
+# Passerelle protocolaire (marie-gateway), transport-agnostique.
+gateway = ["dep:marie-gateway"]
+# Transport WebSocket (marie-ws) pour la passerelle.
+ws = ["dep:marie-ws"]
+# Variantes de marie-ws, répercutées ici pour ne pas avoir à en dépendre
+# directement — voir marie-ws/Cargo.toml.
+axum = ["ws", "marie-ws/axum"]
+browser = ["ws", "marie-ws/browser"]
+# Composants UI leptos (voir marie-leptos) — csr/hydrate/ssr n'est pas fixé
+# ici, la feature de rendu active vient de l'unification Cargo avec ce que
+# le consommateur final demande sur `leptos` lui-même.
+leptos = ["dep:marie-leptos"]

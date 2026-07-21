@@ -3,8 +3,14 @@ use serde_json::{Value, json};
 
 use crate::{
     session::{SessionId, client::SessionClient},
-    tools::{Tool, server::ToolServer, worker::ToolWorkerArgs},
+    tools::Tool,
 };
+
+#[cfg(feature = "worker")]
+use crate::tools::worker::ToolWorkerArgs;
+
+#[cfg(feature = "catalog")]
+use crate::tools::server::ToolServer;
 
 /// Lit une ou plusieurs variables de session via une expression JSONPath
 /// (voir [`crate::session::client::SessionClient::query_vars`]).
@@ -148,6 +154,7 @@ struct VarsPatchArgs {
 /// [`crate::session::client::SessionClient`]), sur le même modèle que tout
 /// autre tool sauf qu'il s'exécute pour le compte de n'importe quelle
 /// session sans déclaration séparée par session.
+#[cfg(feature = "worker")]
 pub fn register_builtins_tools_executors(args: ToolWorkerArgs, sessions: SessionClient) -> ToolWorkerArgs {
     let query_sessions = sessions.clone();
     let args = args.add(VARS_QUERY_TOOL, move |session_id: SessionId, request: VarsQueryArgs| {
@@ -169,6 +176,7 @@ pub fn register_builtins_tools_executors(args: ToolWorkerArgs, sessions: Session
 /// exécute les appels), ceci s'exécute sur le nœud qui *sert* le catalogue
 /// et n'a donc pas besoin de s'auto-découvrir via RPC. Idempotent (même
 /// principe que `ToolCatalog::insert`) : sans effet de bord à rejouer.
+#[cfg(feature = "catalog")]
 pub fn register_builtins_tools(tool_server: ToolServer) {
     tool_server.insert(VARS_QUERY_TOOL, vars_query_tool_declaration());
     tool_server.insert(VARS_PATCH_TOOL, vars_patch_tool_declaration());
