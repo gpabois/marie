@@ -8,7 +8,7 @@ use crate::{
     job::JobId,
     network::worker::client::WorkerClient,
     rpc::{RemoteProcedureCall, Void},
-    tools::{Tool, ToolCall, ToolCallId, ToolId, catalog::ToolCatalog, worker::ToolExecution},
+    tools::{ToolDefinition, ToolCall, ToolCallId, ToolId, catalog::ToolCatalog, worker::ToolExecution},
 };
 
 /// Suivi d'un appel de tool délégué à un job `JOB_TOOL_EXECUTE` — voir
@@ -29,9 +29,9 @@ impl RemoteProcedureCall for GetTool {
     const NAME: &'static str = "marie/tools/get";
 
     type Args = ToolId;
-    type Return = Option<Tool>;
+    type Return = Option<ToolDefinition>;
 
-    async fn execute(self, id: ToolId, _: PeerId) -> Option<Tool> {
+    async fn execute(self, id: ToolId, _: PeerId) -> Option<ToolDefinition> {
         self.0.lock().get(id.borrow())
     }
 }
@@ -45,9 +45,9 @@ impl RemoteProcedureCall for ListTool {
     const NAME: &'static str = "marie/tools/list";
 
     type Args = Void;
-    type Return = Vec<Tool>;
+    type Return = Vec<ToolDefinition>;
 
-    async fn execute(self, _: Void, _: PeerId) -> Vec<Tool> {
+    async fn execute(self, _: Void, _: PeerId) -> Vec<ToolDefinition> {
         self.0.lock().list()
     }
 }
@@ -60,10 +60,10 @@ pub struct InsertTool(pub(crate) Arc<Mutex<ToolCatalog>>);
 impl RemoteProcedureCall for InsertTool {
     const NAME: &'static str = "marie/tools/insert";
 
-    type Args = (ToolId, Tool);
+    type Args = (ToolId, ToolDefinition);
     type Return = Void;
 
-    async fn execute(self, (id, tool): (ToolId, Tool), _: PeerId) -> Void {
+    async fn execute(self, (id, tool): (ToolId, ToolDefinition), _: PeerId) -> Void {
         self.0.lock().insert(id, tool);
         Void
     }
@@ -77,10 +77,10 @@ pub struct UpdateTool(pub(crate) Arc<Mutex<ToolCatalog>>);
 impl RemoteProcedureCall for UpdateTool {
     const NAME: &'static str = "marie/tools/update";
 
-    type Args = (ToolId, Tool);
+    type Args = (ToolId, ToolDefinition);
     type Return = Void;
 
-    async fn execute(self, (id, tool): (ToolId, Tool), _: PeerId) -> Void {
+    async fn execute(self, (id, tool): (ToolId, ToolDefinition), _: PeerId) -> Void {
         self.0.lock().insert(id, tool);
         Void
     }

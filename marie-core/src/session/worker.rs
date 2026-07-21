@@ -15,7 +15,7 @@ use crate::{
     network::{bootstrap::BootstrapClient, worker::JobContext},
     rpc::{RpcClient, Void},
     session::{SessionLogId, client::SessionClient, state::{hitl::HitlFrameId, orchestration::Waiter}},
-    tools::{Tool, ToolCall, ToolCallId, builtin::ASK_USER_INPUT_TOOL, client::ToolClient},
+    tools::{ToolDefinition, ToolCall, ToolCallId, builtin::ASK_USER_INPUT_TOOL, client::ToolClient},
 };
 
 pub struct RunAgent {
@@ -34,7 +34,7 @@ impl Job for RunAgent {
     type Return = Void;
 
     async fn execute(self, args: Self::Args, cx: JobContext) ->  Result<Self::Return, anyhow::Error>  {
-        let tools: Vec<Tool> = self.tools
+        let tools: Vec<ToolDefinition> = self.tools
             .list()
             .await?
             .into_iter()
@@ -104,7 +104,7 @@ enum TurnOutcome {
 async fn run_turns(
     agent_id: AgentId,
     model: Model,
-    tools: &[Tool],
+    tools: &[ToolDefinition],
     mut context: Context,
     sessions: &SessionClient,
     tools_client: &ToolClient,

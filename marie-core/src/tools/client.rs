@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::{
     network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void},
-    tools::{NS_TOOL, Tool, ToolCall, ToolCallError, ToolId, rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool}}
+    tools::{NS_TOOL, ToolDefinition, ToolCall, ToolCallError, ToolId, rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool}}
 };
 
 #[derive(Debug, Error)]
@@ -46,7 +46,7 @@ impl ToolClient {
     }
 
     /// Récupère la déclaration d'un tool auprès du control plane.
-    pub async fn get(&self, id: impl Into<ToolId>) -> Result<Tool, ToolError> {
+    pub async fn get(&self, id: impl Into<ToolId>) -> Result<ToolDefinition, ToolError> {
         let id = id.into();
 
         let server = self.select_server(&id)?;
@@ -55,7 +55,7 @@ impl ToolClient {
     }
 
     /// Liste tout le catalogue de tools connu du control plane.
-    pub async fn list(&self) -> Result<Vec<Tool>, ToolError> {
+    pub async fn list(&self) -> Result<Vec<ToolDefinition>, ToolError> {
         let server = self.select_server(&self.local_peer_id.to_bytes())?;
 
         let list = self.rpc.invoke::<ListTool>(Void, [server]).await?;
@@ -64,7 +64,7 @@ impl ToolClient {
     }
 
     /// Crée un tool dans le catalogue.
-    pub async fn insert(&self, id: impl Into<ToolId>, tool: Tool) -> Result<(), ToolError> {
+    pub async fn insert(&self, id: impl Into<ToolId>, tool: ToolDefinition) -> Result<(), ToolError> {
         let id = id.into();
         let server = self.select_server(&id)?;
 
@@ -74,7 +74,7 @@ impl ToolClient {
     }
 
     /// Met à jour la déclaration d'un tool existant.
-    pub async fn update(&self, id: impl Into<ToolId>, tool: Tool) -> Result<(), ToolError> {
+    pub async fn update(&self, id: impl Into<ToolId>, tool: ToolDefinition) -> Result<(), ToolError> {
         let id = id.into();
         let server = self.select_server(&id)?;
 

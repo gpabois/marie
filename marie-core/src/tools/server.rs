@@ -9,7 +9,7 @@ use crate::{
     rpc::{RemoteProcedureCall, RpcServer},
     sink::SinkBoxExt,
     tools::{
-        Tool, ToolCallId, ToolEvent,
+        ToolDefinition, ToolCallId, ToolEvent,
         builtin::register_builtins_tools,
         catalog::{ToolCatalog, ToolId},
         rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, ToolExecutionTracker, UpdateTool},
@@ -66,7 +66,7 @@ impl ToolServer {
     /// — utilisé par [`register_builtins_tools`] pour amorcer les tools
     /// système dès la construction du serveur, avant même qu'un pair distant
     /// ait eu l'occasion de les découvrir via [`crate::tools::rpc::InsertTool`].
-    pub fn insert(&self, id: impl Into<ToolId>, tool: Tool) {
+    pub fn insert(&self, id: impl Into<ToolId>, tool: ToolDefinition) {
         self.catalog.lock().insert(id.into(), tool);
     }
 }

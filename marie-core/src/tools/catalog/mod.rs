@@ -5,7 +5,7 @@ use std::borrow::Borrow;
 
 use loro::{LoroDoc, ToJson};
 
-pub use super::{Tool, ToolId};
+pub use super::{ToolDefinition, ToolId};
 
 /// Catalogue des tools connus du cluster, sur le même principe que
 /// [`crate::model::catalog::ModelCatalog`]/[`crate::expert::catalog::ExpertCatalog`] :
@@ -23,28 +23,28 @@ impl ToolCatalog {
         Self { state }
     }
 
-    pub fn insert(&mut self, id: ToolId, tool: Tool) {
+    pub fn insert(&mut self, id: ToolId, tool: ToolDefinition) {
         let key: &str = id.borrow();
         let value = serde_json::to_value(&tool).unwrap();
         let tools = self.state.get_map("tools");
         tools.insert(key, value).unwrap();
     }
 
-    pub fn get(&self, id: &str) -> Option<Tool> {
+    pub fn get(&self, id: &str) -> Option<ToolDefinition> {
         let tools = self.state.get_map("tools");
         let value = tools.get(id)?;
         let value = value.as_value()?;
         serde_json::from_value(value.to_json_value()).ok()
     }
 
-    pub fn remove(&mut self, id: &str) -> Option<Tool> {
+    pub fn remove(&mut self, id: &str) -> Option<ToolDefinition> {
         let removed = self.get(id);
         let tools = self.state.get_map("tools");
         let _ = tools.delete(id);
         removed
     }
 
-    pub fn list(&self) -> Vec<Tool> {
+    pub fn list(&self) -> Vec<ToolDefinition> {
         let tools = self.state.get_map("tools");
         tools
             .values()

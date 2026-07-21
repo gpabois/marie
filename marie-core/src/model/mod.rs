@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{agent::AgentId, rpc::RpcError, secret::SecretError, tools::{Tool as MarieTool, ToolCall, ToolCallId}};
+use crate::{agent::AgentId, rpc::RpcError, secret::SecretError, tools::{ToolDefinition as MarieTool, ToolCall, ToolCallId}};
 
 pub mod catalog;
 pub mod model;

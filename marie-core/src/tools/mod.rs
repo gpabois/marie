@@ -11,10 +11,11 @@ pub mod rpc;
 use std::borrow::Borrow;
 use std::fmt::Display;
 
+use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentId, id::ID, job::JobId, network::worker::JobResult, pubsub::PubSubMessage, session::SessionId, tools::client::ToolError};
+use crate::{agent::AgentId, id::ID, job::JobId, network::worker::{JobResult, server::WorkerServer}, pubsub::PubSubMessage, session::SessionId, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
 
@@ -58,10 +59,38 @@ impl Borrow<str> for ToolId {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Tool {
+pub struct ToolDefinition {
     pub name: ToolId,
     pub description: String,
     pub parameters_schema: Value
+}
+
+#[async_trait]
+pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
+    const NAME: &str;
+    const DESCRIPTION: &str;
+    const PARAMETERS_SCHEMA: Value;
+
+    type Args: Serialize + DeserializeOwned;
+    type Return: Serialize + DeserializeOwned;
+
+    fn definition() -> ToolDefinition {
+        ToolDefinition {
+            name: ToolId::from(Self::NAME),
+            description: Self::DESCRIPTION.to_string(),
+            parameters_schema: Self::PARAMETERS_SCHEMA.clone()
+        }
+    }
+
+    async fn execute(self, cx: Cx, args: Self::Args) -> anyhow::Result<Self::Return>;
+
+    fn register_executor(self, worker: &mut WorkerServer<Cx>) where Self: Clone + Send + Sync + 'static {
+        let executor = move |cx, args| {
+            self.clone().execute(cx, args)
+        };
+
+        worker.register_job_executor(Self::NAME, executor);
+    }
 }
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]

@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 
 use crate::{
     session::{SessionId, client::SessionClient},
-    tools::Tool,
+    tools::ToolDefinition,
 };
 
 #[cfg(feature = "worker")]
@@ -34,8 +34,8 @@ pub const ASK_USER_INPUT_TOOL: &str = "system/ask-user-input";
 /// [`register_builtins_tools_executors`] ne fait qu'enregistrer l'exécuteur,
 /// pas la déclaration.
 #[must_use]
-pub fn vars_query_tool_declaration() -> Tool {
-    Tool {
+pub fn vars_query_tool_declaration() -> ToolDefinition {
+    ToolDefinition {
         name: VARS_QUERY_TOOL.into(),
         description: "Lit une ou plusieurs variables de la session courante via une expression JSONPath (ex: \"$.budget\", \
             \"$.foo.bar[0]\") et renvoie la liste des valeurs trouvées (vide si aucune ne correspond)."
@@ -55,8 +55,8 @@ pub fn vars_query_tool_declaration() -> Tool {
 
 /// Déclaration de [`VARS_PATCH_TOOL`] — voir [`vars_query_tool_declaration`].
 #[must_use]
-pub fn vars_patch_tool_declaration() -> Tool {
-    Tool {
+pub fn vars_patch_tool_declaration() -> ToolDefinition {
+    ToolDefinition {
         name: VARS_PATCH_TOOL.into(),
         description: "Remplace, dans les variables de la session courante, chaque valeur correspondant à une expression \
             JSONPath (ex: \"$.budget\") par la valeur donnée. N'a aucun effet si `path` ne correspond à aucune variable \
@@ -85,8 +85,8 @@ pub fn vars_patch_tool_declaration() -> Tool {
 /// options (`select`/`radio`/`checkboxes`) ou des extensions acceptées
 /// (`file_upload`).
 #[must_use]
-pub fn ask_user_input_tool_declaration() -> Tool {
-    Tool {
+pub fn ask_user_input_tool_declaration() -> ToolDefinition {
+    ToolDefinition {
         name: ASK_USER_INPUT_TOOL.into(),
         description: "Soumet un formulaire d'une ou plusieurs questions à un opérateur humain et attend ses réponses avant de \
             poursuivre. A utiliser pour lever une ambiguïté, obtenir une validation, ou recueillir une information qu'aucune \
