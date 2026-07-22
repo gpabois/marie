@@ -19,6 +19,8 @@ pub mod store;
 pub mod client;
 #[cfg(feature = "catalog")]
 pub mod persistency;
+#[cfg(feature = "catalog")]
+mod vfs;
 
 pub use client::Client;
 #[cfg(feature = "catalog")]

@@ -184,6 +184,12 @@ pub struct WorkspaceVarsPatchRequest {
     pub value: Value,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkspaceVarsRemoveRequest {
+    pub workspace_id: WorkspaceId,
+    pub path: String,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

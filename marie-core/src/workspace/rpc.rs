@@ -5,11 +5,8 @@ use serde_json::Value;
 use tokio::sync::oneshot;
 
 use crate::{
-    rpc::{RemoteProcedureCall, Void},
-    workspace::{
-        Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest,
-        server::{WorkspaceCommand, query_vars},
-        store::{WorkspaceStore, WorkspaceStoreClient},
+    rpc::{RemoteProcedureCall, Void}, workspace::{
+        Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest, WorkspaceVarsRemoveRequest, server::{WorkspaceCommand, query_vars}, store::{WorkspaceStore, WorkspaceStoreClient},
     },
 };
 
@@ -173,6 +170,26 @@ impl RemoteProcedureCall for PatchVars {
             workspace_id: request.workspace_id,
             path: request.path,
             value: request.value,
+            reply,
+        });
+        rx.await.unwrap_or_else(|_| Err("le serveur de workspaces s'est arrêté".to_string()))
+    }
+}
+
+pub struct RemoveVars(pub(crate) mpsc::UnboundedSender<WorkspaceCommand>);
+
+#[async_trait]
+impl RemoteProcedureCall for RemoveVars {
+    const NAME: &'static str = "/marie/workspaces/vars/remove";
+
+    type Args = WorkspaceVarsRemoveRequest;
+    type Return = Result<(), String>;
+
+    async fn execute(self, request: WorkspaceVarsRemoveRequest, _: PeerId) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        let _ = self.0.unbounded_send(WorkspaceCommand::RemoveVars {
+            workspace_id: request.workspace_id,
+            path: request.path,
             reply,
         });
         rx.await.unwrap_or_else(|_| Err("le serveur de workspaces s'est arrêté".to_string()))

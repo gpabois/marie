@@ -10,7 +10,7 @@ use typed_builder::TypedBuilder;
 
 use crate::{
     agent::{AgentId, context::ContextEntry, frame::AgentFrame, role::Role, status::{AgentResponse, AgentStatus, YieldStatus}}, hitl::{Answer, Question}, layer::Layer, network::{bootstrap::BootstrapClient, worker::client::WorkerClient}, rpc::{RemoteProcedureCall, RpcServer}, session::{
-        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, state::{
+        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, state::{
             StateGraph,
             executable::{OrchestrationStrategy, ResolvedChildTask},
             frame::{GraphFrame, GraphFrameId, GraphOwner, GraphResponse, GraphStackFrame},
@@ -58,6 +58,7 @@ pub(crate) enum SessionCommand {
     AppendLog { session_id: SessionId, line: String, reply: oneshot::Sender<Result<(), String>> },
     InsertInLog { session_id: SessionId, log_id: SessionLogId, text: String, reply: oneshot::Sender<Result<(), String>> },
     PatchVars { session_id: SessionId, path: String, value: Value, reply: oneshot::Sender<Result<(), String>> },
+    RemoveVars { session_id: SessionId, path: String, reply: oneshot::Sender<Result<(), String>> },
     /// Pousse un nouveau [`GraphFrame`] et fait passer `agent_id` en
     /// [`YieldStatus::WaitingGraph`] — voir [`push_graph`].
     PushGraph { agent_id: AgentId, graph_id: GraphFrameId, graph: StateGraph, reply: oneshot::Sender<Result<(), String>> },
@@ -206,6 +207,10 @@ impl SessionServerActor {
                                 tokio::spawn(Self::patch_vars(session_id, path, value, store.clone(), event_tx.clone(), reply));
                                 continue;
                             }
+                            RemoveVars { session_id, path, reply } => {
+                                tokio::spawn(Self::remove_vars(session_id, path, store.clone(), event_tx.clone(), reply));
+                                continue;
+                            }
                             PushGraph { agent_id, graph_id, graph, reply } => {
                                 tokio::spawn(Self::push_graph(agent_id, graph_id, graph, store.clone(), event_tx.clone(), reply));
                                 continue;
@@ -255,6 +260,7 @@ impl SessionServerActor {
             AppendLog(cmd_tx.clone()).register(&mut args.rpc_server);
             InsertInLog(cmd_tx.clone()).register(&mut args.rpc_server);
             PatchVars(cmd_tx.clone()).register(&mut args.rpc_server);
+            RemoveVars(cmd_tx.clone()).register(&mut args.rpc_server);
             PushGraph(cmd_tx.clone()).register(&mut args.rpc_server);
             UpdateGraphStep(cmd_tx.clone()).register(&mut args.rpc_server);
             ReportGraphDispatch(cmd_tx.clone()).register(&mut args.rpc_server);
@@ -429,6 +435,26 @@ impl SessionServerActor {
         reply: oneshot::Sender<Result<(), String>>,
     ) -> anyhow::Result<()> {
         match patch_vars(store, session_id, &path, value).await {
+            Ok(()) => {
+                let _ = event_tx.unbounded_send(SessionEvent::VarsPatched { session_id });
+                let _ = reply.send(Ok(()));
+            }
+            Err(error) => {
+                let _ = reply.send(Err(error.to_string()));
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn remove_vars(
+        session_id: SessionId,
+        path: String,
+        store: SessionStoreClient,
+        event_tx: SessionServerEventEmitter,
+        reply: oneshot::Sender<Result<(), String>>,
+    ) -> anyhow::Result<()> {
+        match remove_vars(store, session_id, &path).await {
             Ok(()) => {
                 let _ = event_tx.unbounded_send(SessionEvent::VarsPatched { session_id });
                 let _ = reply.send(Ok(()));
@@ -1032,6 +1058,23 @@ pub(crate) async fn patch_vars(
     let mut session = get_session(store.clone(), session_id).await?;
     let doc = serde_json::to_value(&session.vars)?;
     let patched = jsonpath_lib::replace_with(doc, path, &mut |_| Some(value.clone()))?;
+    session.vars = serde_json::from_value(patched)?;
+
+    store.replace(session).await?;
+    Ok(())
+}
+
+/// Retire, dans `Session::vars` traité comme un unique document JSON, chaque
+/// nœud correspondant à `path` (voir [`crate::session::SessionVarsRemoveRequest`])
+/// — même mécanique que `workspace::server::remove_vars`.
+pub(crate) async fn remove_vars(
+    store: SessionStoreClient,
+    session_id: SessionId,
+    path: &str,
+) -> anyhow::Result<()> {
+    let mut session = get_session(store.clone(), session_id).await?;
+    let doc = serde_json::to_value(&session.vars)?;
+    let patched = jsonpath_lib::delete(doc, path)?;
     session.vars = serde_json::from_value(patched)?;
 
     store.replace(session).await?;

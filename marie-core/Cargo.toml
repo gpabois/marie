@@ -70,6 +70,10 @@ object_store = { version = "0.14.0", features = ["aws"], optional = true }
 # qu'un fichier redb embarqué par nœud — optionnel, seul le rôle `catalog`
 # en a besoin (voir la feature du même nom ci-dessous).
 sqlx = { version = "0.9", default-features = false, optional = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "json", "chrono"] }
+# Utilisé par vfs::postgres::PostgresObjectStore pour manipuler le contenu
+# binaire des objets (`Bytes`) reçu/renvoyé par `object_store` — optionnel,
+# même feature que `object_store`/`sqlx` ci-dessus.
+bytes = { version = "1", optional = true }
 futures-util.workspace = true
 jsonpath_lib = "0.3.0"
 
@@ -88,6 +92,6 @@ worker = ["client"]
 # Rôle catalogue : sert les catalogues modèles/tools/experts/sessions/
 # workspaces (`start_catalog`), adossés à Postgres — seule feature qui tire
 # `sqlx`/`object_store`.
-catalog = ["client", "dep:sqlx", "dep:object_store"]
+catalog = ["client", "dep:sqlx", "dep:object_store", "dep:bytes"]
 # Raccourci pour démarrer un nœud complet (worker + catalogue).
 node = ["worker", "catalog"]

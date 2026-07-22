@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     rpc::{RemoteProcedureCall, Void}, session::{
-        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, server::{SessionCommand, query_vars}, state::hitl::HitlFrameId, store::{SessionStore, SessionStoreClient},
+        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_vars}, state::hitl::HitlFrameId, store::{SessionStore, SessionStoreClient},
     },
 };
 
@@ -276,6 +276,29 @@ impl RemoteProcedureCall for PatchVars {
             session_id: request.session_id,
             path: request.path,
             value: request.value,
+            reply,
+        });
+        rx.await.unwrap_or_else(|_| Err("le serveur de sessions s'est arrêté".to_string()))
+    }
+}
+
+/// Retire, dans `Session::vars`, chaque nœud trouvé par une expression
+/// JSONPath — voir [`SessionVarsRemoveRequest`].
+#[derive(Clone)]
+pub struct RemoveVars(pub(crate) mpsc::UnboundedSender<SessionCommand>);
+
+#[async_trait]
+impl RemoteProcedureCall for RemoveVars {
+    const NAME: &'static str = "/marie/sessions/vars/remove";
+
+    type Args = SessionVarsRemoveRequest;
+    type Return = Result<(), String>;
+
+    async fn execute(self, request: SessionVarsRemoveRequest, _: PeerId) -> Result<(), String> {
+        let (reply, rx) = oneshot::channel();
+        let _ = self.0.unbounded_send(SessionCommand::RemoveVars {
+            session_id: request.session_id,
+            path: request.path,
             reply,
         });
         rx.await.unwrap_or_else(|_| Err("le serveur de sessions s'est arrêté".to_string()))

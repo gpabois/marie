@@ -69,16 +69,17 @@ pub struct ToolDefinition {
 pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
     const NAME: &str;
     const DESCRIPTION: &str;
-    const PARAMETERS_SCHEMA: Value;
 
     type Args: Serialize + DeserializeOwned;
     type Return: Serialize + DeserializeOwned;
+
+    fn parameters_schema() -> Value;
 
     fn definition() -> ToolDefinition {
         ToolDefinition {
             name: ToolId::from(Self::NAME),
             description: Self::DESCRIPTION.to_string(),
-            parameters_schema: Self::PARAMETERS_SCHEMA.clone()
+            parameters_schema: Self::parameters_schema()
         }
     }
 

@@ -277,6 +277,16 @@ pub struct SessionVarsPatchRequest {
     pub value: Value,
 }
 
+/// Charge utile de [`rpc::RemoveVars`] : retire, dans `Session::vars` traité
+/// comme un document JSON unique (voir [`SessionVarsQueryRequest`]), chaque
+/// nœud correspondant à `path` — même sémantique que
+/// [`crate::workspace::WorkspaceVarsRemoveRequest`].
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionVarsRemoveRequest {
+    pub session_id: SessionId,
+    pub path: String,
+}
+
 /// Charge utile de [`rpc::PushGraph`] : `agent_id` pousse `graph`, un nouveau
 /// [`GraphFrame`] identifié par `graph_id` — voir [`server::push_graph`].
 #[derive(Debug, Clone, Serialize, Deserialize)]

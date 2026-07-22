@@ -3,12 +3,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    network::bootstrap::BootstrapClient,
-    rpc::{RpcClient, RpcError, Void},
-    session::SessionId,
-    workspace::{
-        NS_WORKSPACE, Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest,
-        rpc::{AddSession, GetWorkspace, InsertWorkspace, ListWorkspace, PatchVars, QueryVars, RemoveSession, RemoveWorkspace},
+    network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void}, session::SessionId, workspace::{
+        NS_WORKSPACE, Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest, WorkspaceVarsRemoveRequest, rpc::{AddSession, GetWorkspace, InsertWorkspace, ListWorkspace, PatchVars, QueryVars, RemoveSession, RemoveVars, RemoveWorkspace},
     },
 };
 
@@ -141,6 +137,12 @@ impl WorkspaceClient {
         let request = WorkspaceVarsPatchRequest { workspace_id, path: path.into(), value };
 
         self.rpc.invoke::<PatchVars>(request, [owner]).await?.map_err(WorkspaceError::Server)
+    }
+
+    pub async fn remove_vars(&self, workspace_id: WorkspaceId, path: impl Into<String>) -> Result<(), WorkspaceError> {
+        let owner = self.select_owner(&workspace_id)?;
+        let request = WorkspaceVarsRemoveRequest {workspace_id, path: path.into() };
+        self.rpc.invoke::<RemoveVars>(request, [owner]).await?.map_err(WorkspaceError::Server)
     }
 
     /// Sélection déterministe du pair propriétaire (hachage cohérent) —

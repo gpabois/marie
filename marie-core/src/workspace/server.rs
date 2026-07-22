@@ -38,6 +38,7 @@ pub(crate) enum WorkspaceCommand {
     AddSession { workspace_id: WorkspaceId, session_id: SessionId, reply: oneshot::Sender<Result<(), String>> },
     RemoveSession { workspace_id: WorkspaceId, session_id: SessionId, reply: oneshot::Sender<Result<(), String>> },
     PatchVars { workspace_id: WorkspaceId, path: String, value: Value, reply: oneshot::Sender<Result<(), String>> },
+    RemoveVars {workspace_id: WorkspaceId, path: String, reply: oneshot::Sender<Result<(), String>> }
 }
 
 type WorkspaceServerEventEmitter = UnboundedSender<WorkspaceEvent>;
@@ -113,6 +114,14 @@ impl WorkspaceServerActor {
                                 }
                                 PatchVars { workspace_id, path, value, reply } => {
                                     tokio::spawn(Self::patch_vars(workspace_id, path, value, store.clone(), event_tx.clone(), reply));
+                                }
+                                RemoveVars {workspace_id, path, reply} => {
+                                    let store = store.clone();
+                                    let event_tx = event_tx.clone();
+                                    tokio::spawn(async move {
+                                        let result = Self::remove_vars(workspace_id, path, store, event_tx).await;
+                                        let _ = reply.send(result);
+                                    });
                                 }
                             }
                         }
@@ -217,6 +226,17 @@ impl WorkspaceServerActor {
 
         Ok(())
     }
+
+    async fn remove_vars(
+        workspace_id: WorkspaceId,
+        path: String,
+        store: WorkspaceStoreClient,
+        event_tx: WorkspaceServerEventEmitter,
+    ) -> Result<(), String> {
+        remove_vars(store, workspace_id, &path).await.map_err(|err| err.to_string())?;
+        let _ = event_tx.unbounded_send(WorkspaceEvent::VarsPatched { workspace_id });
+        Ok(())
+    }
 }
 
 #[derive(Clone)]
@@ -294,6 +314,19 @@ pub(crate) async fn patch_vars(
     let patched = jsonpath_lib::replace_with(doc, path, &mut |_| Some(value.clone()))?;
     workspace.vars = serde_json::from_value(patched)?;
 
+    store.replace(workspace).await?;
+    Ok(())
+}
+
+pub(crate) async fn remove_vars(
+    store: WorkspaceStoreClient,
+    workspace_id: WorkspaceId,
+    path: &str,
+) -> anyhow::Result<()> {
+    let mut workspace = get_workspace(store.clone(), workspace_id).await?;
+    let doc = serde_json::to_value(&workspace.vars)?;
+    let patched = jsonpath_lib::delete(doc, path)?;
+    workspace.vars = serde_json::from_value(patched)?;
     store.replace(workspace).await?;
     Ok(())
 }

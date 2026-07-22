@@ -10,8 +10,8 @@ use crate::{
     network::bootstrap::BootstrapClient,
     rpc::{RpcClient, RpcError, Void},
     session::{
-        NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest,
-        rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
+        NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest,
+        rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
         state::{
             StateGraph,
             executable::{OrchestrationStrategy, ResolvedChildTask},
@@ -168,6 +168,15 @@ impl SessionClient {
         let request = SessionVarsPatchRequest { session_id, path: path.into(), value };
 
         self.rpc.invoke::<PatchVars>(request, [catalog]).await?.map_err(SessionError::Server)
+    }
+
+    /// Retire, dans `Session::vars` de `session_id`, chaque nœud
+    /// correspondant à `path` (JSONPath) — voir [`SessionVarsRemoveRequest`].
+    pub async fn remove_vars(&self, session_id: SessionId, path: impl Into<String>) -> Result<(), SessionError> {
+        let catalog = self.select_catalog(session_id)?;
+        let request = SessionVarsRemoveRequest { session_id, path: path.into() };
+
+        self.rpc.invoke::<RemoveVars>(request, [catalog]).await?.map_err(SessionError::Server)
     }
 
     /// Pousse un nouveau [`GraphFrame`] et fait passer `agent_id` en
