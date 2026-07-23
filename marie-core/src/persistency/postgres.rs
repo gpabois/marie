@@ -14,8 +14,8 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 ///
 /// À appeler une fois par l'appelant après avoir ouvert son [`PgPool`],
 /// avant de construire tout composant `Postgres*` de ce module.
-pub async fn run_migrations(pool: &PgPool) -> anyhow::Result<()> {
-    sqlx::migrate!().run(pool).await.context("application des migrations PostgreSQL")?;
+pub async fn run_migrations(pool: &PgPool) -> Result<(), sqlx::Error> {
+    sqlx::migrate!().run(pool).await?;
     Ok(())
 }
 
