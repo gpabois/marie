@@ -15,14 +15,12 @@ use crate::{
     },
     expert::client::ExpertClient,
     hitl::Question,
-    session::{
-        SessionId,
-        state::{Edge, Node, StateGraph, StateGraphError, client::StateGraphClient, declaration::StateGraphId},
-    },
+    session::SessionId,
+    state_graph::{Edge, Node, StateGraph, StateGraphError, client::StateGraphClient, declaration::StateGraphId},
 };
 
 /// Manière dont les enfants d'une orchestration (voir [`Executable::Orchestration`]
-/// et [`crate::session::state::orchestration::OrchestrationFrame`]) s'exécutent
+/// et [`crate::state_graph::orchestration::OrchestrationFrame`]) s'exécutent
 /// les uns par rapport aux autres.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -50,11 +48,11 @@ pub enum OrchestrationStrategy {
 /// - [`Executable::Subgraph`] délègue le nœud à un graphe imbriqué —
 ///   composition hiérarchique, voir [`SubgraphSource`].
 /// - [`Executable::Orchestration`] déclenche un fan-out de sous-tâches (voir
-///   [`crate::session::state::orchestration::OrchestrationFrame`]) sans faire
+///   [`crate::state_graph::orchestration::OrchestrationFrame`]) sans faire
 ///   de l'orchestration un mode du moteur de graphe lui-même — juste un point
 ///   d'entrée invocable depuis un nœud.
 /// - [`Executable::AskUserInput`] pousse un
-///   [`crate::session::state::hitl::HitlFrame`] et fait attendre le curseur
+///   [`crate::state_graph::hitl::HitlFrame`] et fait attendre le curseur
 ///   dessus (voir [`NodeOutcome::AskUserInput`]) — variante déclarative
 ///   (questions fixes) du tool `system/ask-user-input` côté `AgentFrame` ;
 ///   un nœud ayant besoin de questions construites dynamiquement à partir
@@ -83,7 +81,7 @@ pub enum Executable {
 /// Origine d'un sous-graphe référencé par [`Executable::Subgraph`] — inline
 /// (construit à la volée par l'agent qui pousse ce graphe, ex. via
 /// `system/push-mode`) ou une déclaration nommée du
-/// [`StateGraphCatalog`](crate::session::state::catalog::StateGraphCatalog),
+/// [`StateGraphCatalog`](crate::state_graph::catalog::StateGraphCatalog),
 /// réutilisable d'un graphe à l'autre.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "source", rename_all = "snake_case")]
@@ -127,14 +125,14 @@ pub enum ResolvedChildTask {
 ///   correspondant (même ordre anti-course que `report_tool_dispatch`).
 /// - [`NodeOutcome::SpawnOrchestration`] : résolution d'un nœud
 ///   [`Executable::Orchestration`] — même remarque, l'appelant crée
-///   l'[`OrchestrationFrame`](crate::session::state::orchestration::OrchestrationFrame).
+///   l'[`OrchestrationFrame`](crate::state_graph::orchestration::OrchestrationFrame).
 /// - [`NodeOutcome::EnterSubgraph`] : résolution d'un nœud
 ///   [`Executable::Subgraph`] — l'appelant empile ce graphe sur
 ///   `GraphFrame::stack`.
 /// - [`NodeOutcome::AskUserInput`] : résolution d'un nœud
 ///   [`Executable::AskUserInput`] (ou renvoyée directement par un
 ///   [`Executable::Rust`] enregistré) — l'appelant (`RunGraphStep`) génère
-///   l'identifiant du [`crate::session::state::hitl::HitlFrame`], fait
+///   l'identifiant du [`crate::state_graph::hitl::HitlFrame`], fait
 ///   passer le curseur en `Yielding(WaitingHitl)` et persiste les deux en une
 ///   seule mutation (voir `session::server::push_hitl`) : cette fonction-ci
 ///   ne peut pas le faire elle-même (pas de `SessionClient` disponible ici,
@@ -251,7 +249,7 @@ impl RustRegistry {
 /// catalogues et construire des valeurs), pour rester testable comme
 /// aujourd'hui sans réseau live. L'insertion effective des frames enfants
 /// dans `Session` et la soumission des Jobs correspondants sont la
-/// responsabilité du driver (`RunGraphStep`, voir `session::state::worker`),
+/// responsabilité du driver (`RunGraphStep`, voir `state_graph::worker`),
 /// pas de cette couche.
 #[derive(Clone)]
 pub struct GraphRuntime {

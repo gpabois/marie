@@ -9,10 +9,8 @@ use crate::session::{Session, SessionId};
 #[cfg(feature = "catalog")]
 use crate::{
     agent::{AgentId, frame::AgentFrame},
-    session::{
-        SessionLog,
-        state::{frame::GraphFrame, hitl::HitlFrame, orchestration::OrchestrationFrame},
-    },
+    session::SessionLog,
+    state_graph::{frame::GraphFrame, hitl::HitlFrame, orchestration::OrchestrationFrame},
     store::PgStore,
 };
 #[cfg(feature = "catalog")]

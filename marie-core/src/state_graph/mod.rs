@@ -21,10 +21,8 @@ use thiserror::Error;
 
 use crate::{
     agent::status::AgentStatus,
-    session::{
-        SessionId,
-        state::executable::{Executable, GraphRuntime, NodeOutcome, resolve_agent_task, resolve_child_task, resolve_subgraph},
-    },
+    session::SessionId,
+    state_graph::executable::{Executable, GraphRuntime, NodeOutcome, resolve_agent_task, resolve_child_task, resolve_subgraph},
 };
 
 pub const NS_STATE_GRAPH: &str = "/marie/ns/state-graphs";
@@ -66,6 +64,9 @@ pub enum NodeKind {
     Start,
     End,
 }
+
+
+
 
 /// Un état du graphe. `action` s'exécute à l'entrée du nœud (voir
 /// [`StateGraph::execute_cursor`]) ; `None` pour un nœud purement de
@@ -196,7 +197,7 @@ pub enum StateGraphError {
 }
 
 /// Identifiant d'un [`Cursor`] — un simple compteur local au
-/// [`StateGraph`]/[`crate::session::state::frame::GraphStackFrame`] qui le
+/// [`StateGraph`]/[`crate::state_graph::frame::GraphStackFrame`] qui le
 /// porte : pas besoin d'unicité globale (contrairement à [`crate::agent::AgentId`]),
 /// deux curseurs de deux graphes différents peuvent porter le même id sans
 /// collision, seule l'unicité *au sein d'un même* `StateGraph` compte.
@@ -249,7 +250,7 @@ pub enum AdvanceOutcome {
 }
 
 /// Mode d'exécution d'une session dans lequel le déroulement suit un graphe
-/// d'états explicite (voir [`crate::session::state::frame::GraphFrame`]) —
+/// d'états explicite (voir [`crate::state_graph::frame::GraphFrame`]) —
 /// chaque nœud peut exécuter une action (voir [`Node::action`]), chaque
 /// arête peut conditionner son franchissement (voir [`Edge::guard`]), un
 /// nœud peut router vers l'un des trois modes de composition décrits dans la
@@ -380,7 +381,7 @@ impl StateGraph {
     /// [`Node::action`]), s'il y en a une, contre son `last_output` courant.
     /// Peut retourner un [`NodeOutcome::Yield`]/[`NodeOutcome::SpawnAgent`]/
     /// [`NodeOutcome::SpawnOrchestration`]/[`NodeOutcome::EnterSubgraph`] : à
-    /// l'appelant (le driver `RunGraphStep`, voir [`crate::session::state::worker`])
+    /// l'appelant (le driver `RunGraphStep`, voir [`crate::state_graph::worker`])
     /// de traiter chacun sans appeler [`Self::advance_cursor`] dans la
     /// foulée — voir la doc de [`NodeOutcome`].
     ///
@@ -575,7 +576,7 @@ impl StateGraph {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::session::state::executable::RustRegistry;
+    use crate::state_graph::executable::RustRegistry;
 
     fn session_id() -> SessionId {
         SessionId::new(crate::id::generate_id())

@@ -1,5 +1,6 @@
-use libp2p::{StreamProtocol, Swarm, gossipsub, identify, mdns, rendezvous, request_response, swarm::{NetworkBehaviour, SwarmEvent::Behaviour}};
-use tracing::info;
+use std::ops::Deref;
+
+use libp2p::{PeerId, StreamProtocol, Swarm, gossipsub, identify, mdns, rendezvous, request_response, swarm::{NetworkBehaviour, SwarmEvent::Behaviour}};
 
 use crate::network::{peer::NodeKind};
 
@@ -20,6 +21,17 @@ pub struct MarieBehaviour {
     pub pub_sub: gossipsub::Behaviour,
     pub rendezvous: rendezvous::client::Behaviour,
     pub oneway: request_response::json::Behaviour<mux::Frame, ()>
+}
+
+#[derive(Clone, Copy)]
+pub struct LocalPeerId(PeerId);
+
+impl Deref for LocalPeerId {
+    type Target = PeerId;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
 }
 
 pub type MarieSwarm = Swarm<MarieBehaviour>;

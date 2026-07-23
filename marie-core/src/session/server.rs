@@ -10,16 +10,17 @@ use typed_builder::TypedBuilder;
 
 use crate::{
     agent::{AgentId, context::ContextEntry, frame::AgentFrame, role::Role, status::{AgentResponse, AgentStatus, YieldStatus}}, hitl::{Answer, Question}, layer::Layer, network::{bootstrap::BootstrapClient, worker::client::WorkerClient}, rpc::{RemoteProcedureCall, RpcServer}, session::{
-        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, state::{
-            StateGraph,
-            executable::{OrchestrationStrategy, ResolvedChildTask},
-            frame::{GraphFrame, GraphFrameId, GraphOwner, GraphResponse, GraphStackFrame},
-            hitl::{HitlFrame, HitlFrameId, HitlFrameStatus},
-            orchestration::{ChildRef, OrchestrationFrame, OrchestrationFrameId, Waiter},
-        }, store::{SessionStore, SessionStoreClient}, worker::RunAgent,
+        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, store::{SessionStore, SessionStoreClient}, worker::RunAgent,
     }, sink::SinkBoxExt as _, tools::{ToolCallId, ToolCallResult},
 };
-use crate::session::state::worker::RunGraphStep;
+use crate::state_graph::{
+    StateGraph,
+    executable::{OrchestrationStrategy, ResolvedChildTask},
+    frame::{GraphFrame, GraphFrameId, GraphOwner, GraphResponse, GraphStackFrame},
+    hitl::{HitlFrame, HitlFrameId, HitlFrameStatus},
+    orchestration::{ChildRef, OrchestrationFrame, OrchestrationFrameId, Waiter},
+    worker::RunGraphStep,
+};
 
 #[derive(TypedBuilder)]
 pub struct SessionServerArgs {
@@ -709,7 +710,7 @@ pub(crate) async fn get_session(store: SessionStoreClient, session_id: SessionId
 /// Réveil des attendants en cascade : parcourt ensuite (1) les autres
 /// [`AgentFrame`] de la session en [`YieldStatus::WaitingAgents`] (fan-out
 /// direct entre agents), (2) les curseurs de [`GraphFrame`] en
-/// [`YieldStatus::WaitingAgents`] (nœud [`Executable::Agent`](crate::session::state::executable::Executable::Agent)),
+/// [`YieldStatus::WaitingAgents`] (nœud [`Executable::Agent`](crate::state_graph::executable::Executable::Agent)),
 /// et (3) les [`OrchestrationFrame`] dont `agent_id` est un enfant attendu —
 /// une orchestration entièrement résolue réveille à son tour son `owner`
 /// (voir [`resolve_orchestration_owner`]). Renvoie le statut résultant du
@@ -1156,7 +1157,7 @@ pub(crate) async fn report_graph_dispatch(
 }
 
 /// Rapporte l'issue d'un `GraphFrame` (racine conclue ou en échec, voir
-/// [`crate::session::state::worker::RunGraphStep`]) — même mécanique de
+/// [`crate::state_graph::worker::RunGraphStep`]) — même mécanique de
 /// réveil en cascade que [`report_agent_run`] : les [`AgentFrame`] en
 /// [`YieldStatus::WaitingGraph`] et les [`OrchestrationFrame`] dont ce graphe
 /// est un enfant attendu sont débloqués.
@@ -1309,7 +1310,7 @@ fn hitl_answers_to_value(answers: &HashMap<String, Answer>) -> Value {
 /// [`YieldStatus::WaitingHitl`] — appelée par le tool `system/ask-user-input`
 /// (`owner: Waiter::Agent`, `owner_graph_update: None`, voir
 /// `session::worker::run_turns`) ou par le driver `RunGraphStep` pour un nœud
-/// [`crate::session::state::executable::Executable::AskUserInput`]
+/// [`crate::state_graph::executable::Executable::AskUserInput`]
 /// (`owner: Waiter::Graph`, `owner_graph_update: Some(_)`, sur le même modèle
 /// anti-course que [`push_orchestration`] : le curseur a déjà été mis en
 /// attente dans la copie locale du driver avant cet appel, il ne reste qu'à

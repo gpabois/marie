@@ -19,7 +19,7 @@ pub const VARS_QUERY_TOOL: &str = "system/vars-query";
 /// JSONPath (voir [`crate::session::client::SessionClient::patch_vars`]).
 pub const VARS_PATCH_TOOL: &str = "system/vars-patch";
 /// Soumet un formulaire humain et fait yielder l'agent appelant en attendant
-/// la réponse (voir [`crate::session::state::hitl::HitlFrame`],
+/// la réponse (voir [`crate::state_graph::hitl::HitlFrame`],
 /// [`crate::agent::status::YieldStatus::WaitingHitl`]) — contrairement à
 /// [`VARS_QUERY_TOOL`]/[`VARS_PATCH_TOOL`], ce tool n'a pas d'exécuteur
 /// générique enregistré via [`register_builtins_tools_executors`] : il est

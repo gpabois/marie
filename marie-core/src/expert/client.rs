@@ -2,9 +2,7 @@ use libp2p::PeerId;
 use thiserror::Error;
 
 use crate::{
-    expert::{Expert, GetExpert, InsertExpert, ListExpert, RemoveExpert, UpdateExpert, NS_EXPERT, catalog::ExpertId},
-    network::bootstrap::BootstrapClient,
-    rpc::{RpcClient, RpcError, Void},
+    di::{Factory, Get}, expert::{Expert, GetExpert, InsertExpert, ListExpert, NS_EXPERT, RemoveExpert, UpdateExpert, catalog::ExpertId}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void},
 };
 
 #[derive(Debug, Error)]
@@ -23,21 +21,24 @@ pub enum ExpertError {
 /// [`Self::select_catalog`]) plutôt que de s'appuyer sur une réplication Raft.
 #[derive(Clone)]
 pub struct ExpertClient {
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     rpc: RpcClient,
     bootstrap: BootstrapClient
 }
 
-impl ExpertClient {
-    #[must_use]
-    pub fn new(local_peer_id: PeerId, rpc: RpcClient, bootstrap: BootstrapClient) -> Self {
+impl<D> Factory<D> for ExpertClient
+    where D: Get<RpcClient> + Get<LocalPeerId> + Get<BootstrapClient>
+{
+    fn create(container: &D) -> Self {
         Self {
-            rpc,
-            bootstrap,
-            local_peer_id
+            local_peer_id: container.get(),
+            rpc: container.get(),
+            bootstrap: container.get()
         }
     }
+}
 
+impl ExpertClient {
     /// Récupère la déclaration d'un expert auprès du control plane.
     pub async fn get(&self, id: impl Into<ExpertId>) -> Result<Expert, ExpertError> {
         let id = id.into();

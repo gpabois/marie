@@ -6,12 +6,13 @@ use serde::{Deserialize, Serialize};
 use crate::{
     hitl::{Answer, Question},
     id::ID,
-    session::{SessionId, state::orchestration::Waiter},
+    session::SessionId,
+    state_graph::orchestration::Waiter,
 };
 
 /// Identifiant d'un [`HitlFrame`], scopé à sa session — même forme que
-/// [`crate::agent::AgentId`]/[`crate::session::state::frame::GraphFrameId`]/
-/// [`crate::session::state::orchestration::OrchestrationFrameId`].
+/// [`crate::agent::AgentId`]/[`crate::state_graph::frame::GraphFrameId`]/
+/// [`crate::state_graph::orchestration::OrchestrationFrameId`].
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
 pub struct HitlFrameId(SessionId, ID);
@@ -82,11 +83,11 @@ pub enum HitlFrameStatus {
 }
 
 /// Formulaire humain, satellite d'un [`crate::agent::frame::AgentFrame`] ou
-/// d'un [`crate::session::state::frame::GraphFrame`] au même titre qu'une
-/// [`crate::session::state::orchestration::OrchestrationFrame`] (voir la doc
-/// de [`crate::session::state`]) — poussé par le tool `system/ask-user-input`
+/// d'un [`crate::state_graph::frame::GraphFrame`] au même titre qu'une
+/// [`crate::state_graph::orchestration::OrchestrationFrame`] (voir la doc
+/// de [`crate::state_graph`]) — poussé par le tool `system/ask-user-input`
 /// (voir [`crate::tools::builtin::ASK_USER_INPUT_TOOL`]) ou par un nœud
-/// [`crate::session::state::executable::Executable::AskUserInput`] d'un
+/// [`crate::state_graph::executable::Executable::AskUserInput`] d'un
 /// `StateGraph`. `owner` réutilise [`Waiter`] tel quel : il joue ici
 /// exactement le même rôle que pour `OrchestrationFrame::owner`, "qui a
 /// poussé ceci et attend dessus".

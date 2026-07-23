@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use super::{Edge, Node};
 
 /// Identifiant unique d'un graphe dans le
-/// [`StateGraphCatalog`](crate::session::state::catalog::StateGraphCatalog).
+/// [`StateGraphCatalog`](crate::state_graph::catalog::StateGraphCatalog).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct StateGraphId(String);
 
@@ -47,7 +47,7 @@ impl AsRef<[u8]> for StateGraphId {
 }
 
 /// Déclaration réutilisable d'un graphe d'états, hébergée dans le
-/// [`StateGraphCatalog`](crate::session::state::catalog::StateGraphCatalog)
+/// [`StateGraphCatalog`](crate::state_graph::catalog::StateGraphCatalog)
 /// sur le même modèle décentralisé que
 /// [`ExpertCatalog`](crate::expert::catalog::ExpertCatalog)/
 /// [`ModelCatalog`](crate::model::catalog::ModelCatalog) (catalogue `LoroDoc`
@@ -56,12 +56,12 @@ impl AsRef<[u8]> for StateGraphId {
 /// mais conservés sous forme de template nommé plutôt que d'état en cours
 /// d'exécution — contrairement à [`super::StateGraph`], ne porte pas de
 /// curseurs : chaque instanciation (voir
-/// [`crate::session::state::client::StateGraphClient::instantiate`])
+/// [`crate::state_graph::client::StateGraphClient::instantiate`])
 /// reconstruit un graphe frais, positionné sur `entry`, plutôt que de
 /// partager un état mutable entre plusieurs usages du même template. Ne porte
 /// aucun secret (les seuls champs sensibles possibles, un
 /// [`ExpertId`](crate::expert::ExpertId) référencé par un
-/// [`Executable::Agent`](crate::session::state::executable::Executable::Agent),
+/// [`Executable::Agent`](crate::state_graph::executable::Executable::Agent),
 /// ne sont que des identifiants) — rien à chiffrer pour le stockage au repos,
 /// sur le même modèle que [`crate::expert::Expert`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

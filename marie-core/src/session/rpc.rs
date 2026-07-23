@@ -6,8 +6,9 @@ use tokio::sync::oneshot;
 
 use crate::{
     rpc::{RemoteProcedureCall, Void}, session::{
-        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_vars}, state::hitl::HitlFrameId, store::{SessionStore, SessionStoreClient},
+        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_vars}, store::{SessionStore, SessionStoreClient},
     },
+    state_graph::hitl::HitlFrameId,
 };
 
 /// Récupère une session du catalogue, ou `None` si inconnue de ce nœud —
@@ -305,7 +306,7 @@ impl RemoteProcedureCall for RemoveVars {
     }
 }
 
-/// Pousse un nouveau [`crate::session::state::frame::GraphFrame`] — voir
+/// Pousse un nouveau [`crate::state_graph::frame::GraphFrame`] — voir
 /// [`SessionPushGraphRequest`]/[`crate::session::server::push_graph`].
 #[derive(Clone)]
 pub struct PushGraph(pub(crate) mpsc::UnboundedSender<SessionCommand>);
@@ -324,7 +325,7 @@ impl RemoteProcedureCall for PushGraph {
     }
 }
 
-/// Persiste la progression d'un [`crate::session::state::frame::GraphFrame`]
+/// Persiste la progression d'un [`crate::state_graph::frame::GraphFrame`]
 /// après un pas qui n'a ni conclu ni yieldé — voir
 /// [`SessionUpdateGraphStepRequest`]/[`crate::session::server::update_graph_step`].
 #[derive(Clone)]
@@ -369,7 +370,7 @@ impl RemoteProcedureCall for ReportGraphDispatch {
     }
 }
 
-/// Rapporte l'issue finale d'un [`crate::session::state::frame::GraphFrame`] —
+/// Rapporte l'issue finale d'un [`crate::state_graph::frame::GraphFrame`] —
 /// voir [`SessionReportGraphRunRequest`]/[`crate::session::server::report_graph_run`].
 #[derive(Clone)]
 pub struct ReportGraphRun(pub(crate) mpsc::UnboundedSender<SessionCommand>);
@@ -388,7 +389,7 @@ impl RemoteProcedureCall for ReportGraphRun {
     }
 }
 
-/// Crée une nouvelle [`crate::session::state::orchestration::OrchestrationFrame`]
+/// Crée une nouvelle [`crate::state_graph::orchestration::OrchestrationFrame`]
 /// et ses enfants — voir
 /// [`SessionPushOrchestrationRequest`]/[`crate::session::server::push_orchestration`].
 #[derive(Clone)]
@@ -415,7 +416,7 @@ impl RemoteProcedureCall for PushOrchestration {
     }
 }
 
-/// Crée un nouveau [`crate::session::state::hitl::HitlFrame`] — voir
+/// Crée un nouveau [`crate::state_graph::hitl::HitlFrame`] — voir
 /// [`SessionPushHitlRequest`]/[`crate::session::server::push_hitl`].
 #[derive(Clone)]
 pub struct PushHitl(pub(crate) mpsc::UnboundedSender<SessionCommand>);

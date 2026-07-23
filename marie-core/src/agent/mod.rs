@@ -13,7 +13,7 @@ pub use context::Context;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{expert::ExpertId, id::ID, model::model::ModelId, session::{SessionId, state::hitl::HitlFrameId}};
+use crate::{expert::ExpertId, id::ID, model::model::ModelId, session::SessionId, state_graph::hitl::HitlFrameId};
 
 pub mod status;
 pub mod frame;

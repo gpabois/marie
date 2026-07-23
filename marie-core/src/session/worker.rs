@@ -14,7 +14,8 @@ use crate::{
     model::{self, Model, ModelResponse, ModelStatus, client::ModelClient},
     network::{bootstrap::BootstrapClient, worker::JobContext},
     rpc::{RpcClient, Void},
-    session::{SessionLogId, client::SessionClient, state::{hitl::HitlFrameId, orchestration::Waiter}},
+    session::{SessionLogId, client::SessionClient},
+    state_graph::{hitl::HitlFrameId, orchestration::Waiter},
     tools::{ToolDefinition, ToolCall, ToolCallId, builtin::ASK_USER_INPUT_TOOL, client::ToolClient},
 };
 

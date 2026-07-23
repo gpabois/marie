@@ -4,8 +4,9 @@ use crate::{
     expert::client::ExpertClient, 
     model::client::ModelClient, network::{actor::{Network, NetworkActor}, 
     bootstrap::{self, client::BootstrapArgs}, create_swarm, peer::NodeKind}, 
-    rpc, secret::{KeyEpoch, SecretKey, SecretManager}, 
-    session::{client::SessionClient, state::client::StateGraphClient}, 
+    rpc, secret::{KeyEpoch, SecretKey, SecretManager},
+    session::client::SessionClient,
+    state_graph::client::StateGraphClient,
     workspace::client::WorkspaceClient
 };
 

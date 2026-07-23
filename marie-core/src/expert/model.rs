@@ -1,13 +1,14 @@
 use std::borrow::Borrow;
 use std::fmt;
 
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::model::ModelId;
 use crate::tools::ToolId;
 
 /// Identifiant unique d'un expert dans l'[`ExpertCatalog`](crate::expert::catalog::ExpertCatalog).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ExpertId(String);
 
 impl ExpertId {

@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, id::ID, session::state::{frame::{GraphFrame, GraphFrameId}, hitl::{HitlFrame, HitlFrameId}, orchestration::{OrchestrationFrame, OrchestrationFrameId}},
+    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, id::ID, state_graph::{frame::{GraphFrame, GraphFrameId}, hitl::{HitlFrame, HitlFrameId}, orchestration::{OrchestrationFrame, OrchestrationFrameId}},
 };
 
 
@@ -99,7 +99,7 @@ pub struct SessionLog {
 
 /// État d'une session — un ou plusieurs [`AgentFrame`], zéro ou plusieurs
 /// [`GraphFrame`]/[`OrchestrationFrame`]/[`HitlFrame`] satellites (voir la
-/// doc de [`crate::session::state`] pour la symétrie de ces trois), un
+/// doc de [`crate::state_graph`] pour la symétrie de ces trois), un
 /// journal d'évènements (`logs`) et un store clé-valeur libre (`vars`, voir
 /// `persistency::var::SessionVarStore`).
 ///

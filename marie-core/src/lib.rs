@@ -13,6 +13,7 @@ pub mod sink;
 pub mod layer;
 pub mod pubsub;
 pub mod session;
+pub mod state_graph;
 pub mod hitl;
 #[cfg(feature = "catalog")]
 pub mod store;
@@ -21,6 +22,8 @@ pub mod client;
 pub mod persistency;
 #[cfg(feature = "catalog")]
 mod vfs;
+pub mod graph;
+pub mod di;
 
 pub use client::Client;
 #[cfg(feature = "catalog")]

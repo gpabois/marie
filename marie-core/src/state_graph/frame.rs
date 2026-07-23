@@ -5,7 +5,8 @@ use serde_json::Value;
 use crate::{
     agent::{AgentId, status::AgentStatus},
     id::ID,
-    session::{SessionId, state::StateGraph, state::orchestration::OrchestrationFrameId},
+    session::SessionId,
+    state_graph::{StateGraph, orchestration::OrchestrationFrameId},
 };
 
 /// Identifiant d'un [`GraphFrame`], scopé à sa session — même forme que
@@ -69,8 +70,8 @@ impl<'de> Deserialize<'de> for GraphFrameId {
 
 /// Ce qui a poussé un [`GraphFrame`] — un [`AgentFrame`](crate::agent::frame::AgentFrame)
 /// directement (via `system/push-mode`), ou une
-/// [`OrchestrationFrame`](crate::session::state::orchestration::OrchestrationFrame)
-/// qui l'a créé comme enfant (voir [`crate::session::state::executable::ChildTask::Graph`]) —
+/// [`OrchestrationFrame`](crate::state_graph::orchestration::OrchestrationFrame)
+/// qui l'a créé comme enfant (voir [`crate::state_graph::executable::ChildTask::Graph`]) —
 /// dans ce second cas, il n'y a pas d'[`AgentId`] direct à porter tant que la
 /// chaîne de propriété n'a pas été remontée jusqu'à un agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,7 +81,7 @@ pub enum GraphOwner {
 }
 
 /// Issue d'un `GraphFrame`, rapportée par le driver
-/// (`session::state::worker::RunGraphStep`) à `SessionServer` en toute fin
+/// (`state_graph::worker::RunGraphStep`) à `SessionServer` en toute fin
 /// de son dernier pas — même modèle qu'[`crate::agent::status::AgentResponse`]
 /// côté `AgentFrame`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -100,16 +101,16 @@ pub struct GraphStackFrame {
 }
 
 /// État d'exécution d'un State Graph, satellite de [`AgentFrame`](crate::agent::frame::AgentFrame)
-/// au même titre qu'[`OrchestrationFrame`](crate::session::state::orchestration::OrchestrationFrame)
-/// (voir la doc de [`crate::session::state`]) — poussé par un `AgentFrame`
+/// au même titre qu'[`OrchestrationFrame`](crate::state_graph::orchestration::OrchestrationFrame)
+/// (voir la doc de [`crate::state_graph`]) — poussé par un `AgentFrame`
 /// (`owner`, via `system/push-mode`) ou par un nœud d'un autre `GraphFrame`
 /// (composition en profondeur, voir [`GraphStackFrame`]).
 ///
 /// `stack` porte toujours au moins un niveau : un graphe "fixe" (topologie
 /// figée, instancié une fois depuis le catalogue ou construit inline) n'en a
-/// jamais qu'un seul ; un nœud [`crate::session::state::executable::Executable::Subgraph`]
+/// jamais qu'un seul ; un nœud [`crate::state_graph::executable::Executable::Subgraph`]
 /// en empile un second le temps de son exécution (voir
-/// `crate::session::state::worker::RunGraphStep`, le driver qui pilote
+/// `crate::state_graph::worker::RunGraphStep`, le driver qui pilote
 /// toujours le *sommet* de la pile).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct GraphFrame {
@@ -131,14 +132,14 @@ impl GraphFrame {
     }
 
     /// Statut dérivé de l'ensemble des curseurs actifs du sommet de la pile
-    /// (voir la doc de [`crate::session::state::Cursor`]) : `Running` si au
+    /// (voir la doc de [`crate::state_graph::Cursor`]) : `Running` si au
     /// moins un curseur est prêt à avancer, `Yielding` si tous les curseurs
     /// actifs sont bloqués (v1 : celui du premier curseur bloqué rencontré —
     /// agréger plusieurs raisons de blocage simultanées est un raffinement
     /// possible, pas bloquant), `Finished` quand tous les curseurs du niveau
     /// racine ont conclu. Un niveau non-racine entièrement conclu reste
     /// `Running` : c'est au driver de dépiler (voir
-    /// `crate::session::state::worker::RunGraphStep`) avant que ce statut ne
+    /// `crate::state_graph::worker::RunGraphStep`) avant que ce statut ne
     /// redevienne pertinent.
     #[must_use]
     pub fn status(&self) -> AgentStatus {

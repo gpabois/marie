@@ -4,7 +4,7 @@ use thiserror::Error;
 use crate::{
     network::bootstrap::BootstrapClient,
     rpc::{RpcClient, RpcError, Void},
-    session::state::{
+    state_graph::{
         NS_STATE_GRAPH, StateGraph, StateGraphError,
         declaration::{StateGraphDeclaration, StateGraphId},
         rpc::{GetStateGraph, InsertStateGraph, ListStateGraph, RemoveStateGraph, SetStateGraphRequest, UpdateStateGraph},

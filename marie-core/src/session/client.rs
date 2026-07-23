@@ -5,22 +5,16 @@ use thiserror::Error;
 use std::collections::HashMap;
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame, status::AgentResponse},
-    hitl::{Answer, Question},
-    network::bootstrap::BootstrapClient,
-    rpc::{RpcClient, RpcError, Void},
-    session::{
+    agent::{AgentId, frame::AgentFrame, status::AgentResponse}, di::{Factory, Get, Resolve}, hitl::{Answer, Question}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, session::{
         NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest,
         rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
-        state::{
-            StateGraph,
-            executable::{OrchestrationStrategy, ResolvedChildTask},
-            frame::{GraphFrame, GraphFrameId, GraphResponse},
-            hitl::HitlFrameId,
-            orchestration::{OrchestrationFrameId, Waiter},
-        },
-    },
-    tools::{ToolCallId, ToolCallResult},
+    }, state_graph::{
+        StateGraph,
+        executable::{OrchestrationStrategy, ResolvedChildTask},
+        frame::{GraphFrame, GraphFrameId, GraphResponse},
+        hitl::HitlFrameId,
+        orchestration::{OrchestrationFrameId, Waiter},
+    }, tools::{ToolCallId, ToolCallResult},
 };
 
 #[derive(Debug, Error)]
@@ -42,17 +36,27 @@ pub enum SessionError {
 /// une réplication Raft.
 #[derive(Clone)]
 pub struct SessionClient {
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     rpc: RpcClient,
     bootstrap: BootstrapClient,
 }
 
-impl SessionClient {
-    #[must_use]
-    pub fn new(local_peer_id: PeerId, rpc: RpcClient, bootstrap: BootstrapClient) -> Self {
-        Self { rpc, bootstrap, local_peer_id }
+impl<D> Factory<D> for SessionClient 
+    where 
+        D: Get<LocalPeerId> 
+            + Get<RpcClient> 
+            + Get<BootstrapClient>
+{
+    fn create(container: &D) -> Self {
+        Self {
+            local_peer_id: container.get(),
+            rpc: container.resolve(),
+            bootstrap: container.resolve()
+        }
     }
+}
 
+impl SessionClient {
     /// Récupère une session auprès du nœud qui la sert.
     pub async fn get(&self, id: impl Into<SessionId>) -> Result<Session, SessionError> {
         let id = id.into();
@@ -217,7 +221,7 @@ impl SessionClient {
         self.rpc.invoke::<ReportGraphRun>(request, [catalog]).await?.map_err(SessionError::Server)
     }
 
-    /// Crée une nouvelle [`crate::session::state::orchestration::OrchestrationFrame`]
+    /// Crée une nouvelle [`crate::state_graph::orchestration::OrchestrationFrame`]
     /// et ses enfants — voir [`crate::session::server::push_orchestration`].
     pub async fn push_orchestration(
         &self,
@@ -234,7 +238,7 @@ impl SessionClient {
         self.rpc.invoke::<PushOrchestration>(request, [catalog]).await?.map_err(SessionError::Server)
     }
 
-    /// Pousse un nouveau [`crate::session::state::hitl::HitlFrame`] et fait
+    /// Pousse un nouveau [`crate::state_graph::hitl::HitlFrame`] et fait
     /// passer `owner` en [`crate::agent::status::YieldStatus::WaitingHitl`] —
     /// voir [`crate::session::server::push_hitl`].
     pub async fn push_hitl(&self, hitl_id: HitlFrameId, owner: Waiter, questions: Vec<Question>, owner_graph_update: Option<GraphFrame>) -> Result<(), SessionError> {
@@ -245,7 +249,7 @@ impl SessionClient {
     }
 
     /// Rapporte une réponse humaine pour le
-    /// [`crate::session::state::hitl::HitlFrame`] `hitl_id`, ou — si `None` —
+    /// [`crate::state_graph::hitl::HitlFrame`] `hitl_id`, ou — si `None` —
     /// pour l'unique `AgentFrame` de `session_id` en attente (input spontané) —
     /// voir [`crate::session::server::report_user_input`]. Renvoie le
     /// [`HitlFrameId`] effectivement résolu.

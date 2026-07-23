@@ -5,14 +5,14 @@ use std::borrow::Borrow;
 
 use loro::{LoroDoc, ToJson};
 
-pub use crate::session::state::declaration::StateGraphId;
-use crate::session::state::declaration::StateGraphDeclaration;
+pub use crate::state_graph::declaration::StateGraphId;
+use crate::state_graph::declaration::StateGraphDeclaration;
 
 /// Catalogue des graphes d'états connus du nœud qui les sert, sur le même
 /// principe que [`crate::expert::catalog::ExpertCatalog`]/
 /// [`crate::model::catalog::ModelCatalog`] : un état CRDT (`loro`) hébergé sur
 /// un pair choisi par hash-ring (voir
-/// [`crate::session::state::client::StateGraphClient::select_catalog`]),
+/// [`crate::state_graph::client::StateGraphClient::select_catalog`]),
 /// plutôt qu'une réplication Raft.
 pub struct StateGraphCatalog {
     state: LoroDoc,
@@ -68,7 +68,7 @@ mod tests {
 
     fn declaration() -> StateGraphDeclaration {
         StateGraphDeclaration {
-            nodes: vec![crate::session::state::Node::new("start", None)],
+            nodes: vec![crate::state_graph::Node::new("start", None)],
             edges: vec![],
             entry: "start".to_string(),
         }

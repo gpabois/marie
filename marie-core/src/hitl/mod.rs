@@ -28,7 +28,7 @@ pub enum QuestionKind {
     FileUpload { accept: Vec<String> },
 }
 
-/// Une question d'un formulaire [`crate::session::state::hitl::HitlFrame`].
+/// Une question d'un formulaire [`crate::state_graph::hitl::HitlFrame`].
 /// `key` identifie la question au sein du formulaire (voir
 /// [`validate_answers`]) — choisie par l'appelant plutôt que générée, pour
 /// rester lisible côté passerelle humaine sans avoir à conserver une

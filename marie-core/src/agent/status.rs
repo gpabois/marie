@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use crate::{agent::AgentId, session::state::{frame::GraphFrameId, hitl::HitlFrameId, orchestration::OrchestrationFrameId}, tools::ToolCallId};
+use crate::{agent::AgentId, state_graph::{frame::GraphFrameId, hitl::HitlFrameId, orchestration::OrchestrationFrameId}, tools::ToolCallId};
 
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -34,10 +34,10 @@ pub enum YieldStatus {
     },
     /// En attente que des agents enfants terminent — soit un fan-out ad-hoc
     /// direct entre deux [`AgentFrame`](crate::agent::frame::AgentFrame),
-    /// soit un [`Cursor`](crate::session::state::Cursor) de `GraphFrame` en
+    /// soit un [`Cursor`](crate::state_graph::Cursor) de `GraphFrame` en
     /// attente de l'enfant qu'il a spawné pour un nœud
-    /// [`Executable::Agent`](crate::session::state::executable::Executable::Agent)
-    /// (voir `session::state::StateGraph::execute_cursor`) — voir
+    /// [`Executable::Agent`](crate::state_graph::executable::Executable::Agent)
+    /// (voir `state_graph::StateGraph::execute_cursor`) — voir
     /// `session::server::report_agent_run`, qui détecte leur complétion et
     /// resoumet un job une fois tous réunis. `agents` sert à
     /// la fois de liste d'attente et de compteur restant : chaque enfant qui
@@ -51,7 +51,7 @@ pub enum YieldStatus {
     WaitingAgents {
         agents: Vec<AgentId>,
     },
-    /// En attente qu'un [`GraphFrame`](crate::session::state::frame::GraphFrame)
+    /// En attente qu'un [`GraphFrame`](crate::state_graph::frame::GraphFrame)
     /// poussé par cet agent (voir `system/push-mode`) conclue — voir
     /// `session::server::report_graph_run`, qui détecte sa complétion et
     /// resoumet un job pour cet agent une fois débloqué. Même sémantique de
@@ -60,7 +60,7 @@ pub enum YieldStatus {
     WaitingGraph {
         graph: GraphFrameId,
     },
-    /// En attente qu'une [`OrchestrationFrame`](crate::session::state::orchestration::OrchestrationFrame)
+    /// En attente qu'une [`OrchestrationFrame`](crate::state_graph::orchestration::OrchestrationFrame)
     /// poussée par cet agent conclue — voir `session::server::report_agent_run`/
     /// `report_graph_run`, qui scannent aussi les orchestrations en
     /// attente lors du réveil d'un enfant.
@@ -71,14 +71,14 @@ pub enum YieldStatus {
     /// autres variantes, n'attend rien d'externe : peut être repris dès que
     /// `session::server` observe ce yield.
     RunExhausted,
-    /// En attente de la réponse à un [`crate::session::state::hitl::HitlFrame`]
+    /// En attente de la réponse à un [`crate::state_graph::hitl::HitlFrame`]
     /// (formulaire humain, voir `crate::tools::builtin::ASK_USER_INPUT_TOOL`
     /// et `session::server::report_user_input`) — même satellite que
     /// [`Self::WaitingGraph`]/[`Self::WaitingOrchestration`], mais porté soit
     /// par un [`AgentFrame`](crate::agent::frame::AgentFrame) (le tool a été
     /// appelé directement par un agent), soit par un curseur de
-    /// [`GraphFrame`](crate::session::state::frame::GraphFrame) (nœud
-    /// [`Executable::AskUserInput`](crate::session::state::executable::Executable::AskUserInput)) —
+    /// [`GraphFrame`](crate::state_graph::frame::GraphFrame) (nœud
+    /// [`Executable::AskUserInput`](crate::state_graph::executable::Executable::AskUserInput)) —
     /// voir `HitlFrame::owner`. Un input *spontané* (sans `hitl_id` explicite,
     /// voir `session::rpc::ReportUserInput`) ne résout jamais cette variante
     /// quand elle appartient à un curseur de graphe : seul un `AgentFrame` en

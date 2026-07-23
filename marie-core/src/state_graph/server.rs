@@ -4,7 +4,7 @@ use parking_lot::Mutex;
 
 use crate::{
     rpc::{RemoteProcedureCall, RpcServer},
-    session::state::{
+    state_graph::{
         catalog::StateGraphCatalog,
         rpc::{GetStateGraph, InsertStateGraph, ListStateGraph, RemoveStateGraph, UpdateStateGraph},
     },
@@ -12,9 +12,9 @@ use crate::{
 
 /// Sert le catalogue de graphes d'états sur le réseau, sur le même modèle
 /// que [`crate::model::server::ModelServer`] : un `Arc<Mutex<StateGraphCatalog>>`
-/// partagé, exposé par RPC (voir `session::state::rpc`), hébergé sur le pair
+/// partagé, exposé par RPC (voir `state_graph::rpc`), hébergé sur le pair
 /// choisi pour ce namespace (voir
-/// [`crate::session::state::client::StateGraphClient::select_catalog`]).
+/// [`crate::state_graph::client::StateGraphClient::select_catalog`]).
 pub struct StateGraphServer;
 
 impl StateGraphServer {

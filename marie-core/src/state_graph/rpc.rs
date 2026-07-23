@@ -6,12 +6,12 @@ use parking_lot::Mutex;
 
 use crate::{
     rpc::{RemoteProcedureCall, Void},
-    session::state::{catalog::StateGraphCatalog, declaration::{StateGraphDeclaration, StateGraphId}},
+    state_graph::{catalog::StateGraphCatalog, declaration::{StateGraphDeclaration, StateGraphId}},
 };
 
 /// Récupère une déclaration du catalogue de graphes d'états, ou `None` si
 /// inconnue de ce nœud — voir
-/// [`crate::session::state::client::StateGraphClient::get`].
+/// [`crate::state_graph::client::StateGraphClient::get`].
 #[derive(Clone)]
 pub struct GetStateGraph(pub(crate) Arc<Mutex<StateGraphCatalog>>);
 

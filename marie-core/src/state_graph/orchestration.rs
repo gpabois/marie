@@ -7,7 +7,8 @@ use serde_json::Value;
 use crate::{
     agent::{AgentId, status::AgentStatus},
     id::ID,
-    session::{SessionId, state::executable::OrchestrationStrategy, state::frame::GraphFrameId},
+    session::SessionId,
+    state_graph::{executable::OrchestrationStrategy, frame::GraphFrameId},
 };
 
 /// Identifiant d'une [`OrchestrationFrame`], scopé à sa session — même forme
@@ -69,10 +70,10 @@ impl<'de> Deserialize<'de> for OrchestrationFrameId {
 
 /// Référence à un enfant d'une [`OrchestrationFrame`] — un agent nu ou un
 /// sous-graphe indépendant (voir
-/// [`crate::session::state::executable::ChildTask`]), chacun sa propre unité
+/// [`crate::state_graph::executable::ChildTask`]), chacun sa propre unité
 /// d'exécution adressable (son propre [`AgentId`]/[`GraphFrameId`], resoumis
-/// comme Job séparé) — contrairement à un [`crate::session::state::Cursor`]
-/// issu d'un [`crate::session::state::NodeKind::Fork`], qui vit dans le même
+/// comme Job séparé) — contrairement à un [`crate::state_graph::Cursor`]
+/// issu d'un [`crate::state_graph::NodeKind::Fork`], qui vit dans le même
 /// `StateGraph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChildRef {
@@ -121,8 +122,8 @@ impl<'de> Deserialize<'de> for ChildRef {
 
 /// Frame qui a déclenché une orchestration — soit un
 /// [`AgentFrame`](crate::agent::frame::AgentFrame) (via `system/push-mode`),
-/// soit un curseur d'un [`GraphFrame`](crate::session::state::frame::GraphFrame)
-/// (nœud [`Executable::Orchestration`](crate::session::state::executable::Executable::Orchestration)).
+/// soit un curseur d'un [`GraphFrame`](crate::state_graph::frame::GraphFrame)
+/// (nœud [`Executable::Orchestration`](crate::state_graph::executable::Executable::Orchestration)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Waiter {
     Agent(AgentId),
@@ -131,8 +132,8 @@ pub enum Waiter {
 
 /// Fan-out de sous-tâches avec jointure AND, satellite de
 /// [`AgentFrame`](crate::agent::frame::AgentFrame) au même titre que
-/// [`GraphFrame`](crate::session::state::frame::GraphFrame) (voir la doc de
-/// [`crate::session::state`]) — contrairement à ce dernier, sans Job dédié :
+/// [`GraphFrame`](crate::state_graph::frame::GraphFrame) (voir la doc de
+/// [`crate::state_graph`]) — contrairement à ce dernier, sans Job dédié :
 /// purement réactif, mis à jour depuis `session::server` à chaque fois qu'un
 /// enfant rapporte son résultat (voir `session::server::report_agent_run`/
 /// `report_graph_run`, généralisés pour scanner `pending`).

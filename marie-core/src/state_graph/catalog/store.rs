@@ -9,7 +9,7 @@ use tokio::select;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::{
-    session::state::declaration::{StateGraphDeclaration, StateGraphId},
+    state_graph::declaration::{StateGraphDeclaration, StateGraphId},
     store::PgStore,
 };
 
@@ -40,7 +40,7 @@ fn decode_row(row: &PgRow) -> anyhow::Result<StoredStateGraph> {
 }
 
 /// Stockage CRUD local du catalogue de graphes d'états (voir
-/// `session::state::catalog::store`), sur le même principe que
+/// `state_graph::catalog::store`), sur le même principe que
 /// [`crate::session::store::SessionStore`] (voir sa doc pour la justification
 /// du `self` par valeur + `Clone` plutôt que `&self`, et du découpage
 /// `insert`/`replace`).

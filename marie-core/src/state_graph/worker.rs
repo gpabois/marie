@@ -6,21 +6,18 @@ use crate::{
     job::Job,
     network::worker::{JobContext, client::WorkerClient},
     rpc::Void,
-    session::{
-        client::SessionClient,
-        state::{
-            executable::{GraphRuntime, NodeOutcome, RustRegistry},
-            frame::{GraphFrame, GraphResponse, GraphStackFrame},
-            hitl::HitlFrameId,
-            orchestration::{OrchestrationFrameId, Waiter},
-        },
-        worker::RunAgent,
+    session::{client::SessionClient, worker::RunAgent},
+    state_graph::{
+        executable::{GraphRuntime, NodeOutcome, RustRegistry},
+        frame::{GraphFrame, GraphResponse, GraphStackFrame},
+        hitl::HitlFrameId,
+        orchestration::{OrchestrationFrameId, Waiter},
     },
 };
 
 /// Job qui pilote un [`GraphFrame`] pas à pas — même discipline "un pas par
 /// Job" que [`RunAgent`] ("un tour par Job") : ce `Job` exécute et fait
-/// avancer *un seul* curseur (voir [`crate::session::state::Cursor`]) avant
+/// avancer *un seul* curseur (voir [`crate::state_graph::Cursor`]) avant
 /// de se terminer, persistant systématiquement la progression avant de
 /// resoumettre un nouveau Job (soi-même pour continuer, `RunAgent` pour un
 /// enfant spawné par un nœud `Agent`) ou de s'arrêter (curseur yieldé,
@@ -41,7 +38,7 @@ impl RunGraphStep {
 
 /// `true` si tous les curseurs du sommet de la pile de `frame` ont conclu
 /// (`AgentStatus::Finished`) — `false` si `cursors` est vide (curseurs
-/// parqués en attente d'un rendez-vous, voir [`crate::session::state::AdvanceOutcome::ParkedAtJoin`]),
+/// parqués en attente d'un rendez-vous, voir [`crate::state_graph::AdvanceOutcome::ParkedAtJoin`]),
 /// pour ne pas conclure prématurément sur une liste temporairement vide.
 fn stack_top_finished(frame: &GraphFrame) -> bool {
     let cursors = &frame.top().graph.cursors;
@@ -49,7 +46,7 @@ fn stack_top_finished(frame: &GraphFrame) -> bool {
 }
 
 /// Dépile le niveau conclu (voir [`stack_top_finished`]) et reprend le
-/// curseur du niveau parent qui l'avait poussé (voir [`crate::session::state::executable::Executable::Subgraph`]) :
+/// curseur du niveau parent qui l'avait poussé (voir [`crate::state_graph::executable::Executable::Subgraph`]) :
 /// injecte la sortie du sous-graphe comme `last_output` de ce curseur, puis
 /// le fait *avancer* (pas ré-exécuter — l'action du nœud `Subgraph` a déjà
 /// eu lieu, c'est tout le sous-graphe qu'elle représentait) au-delà du nœud

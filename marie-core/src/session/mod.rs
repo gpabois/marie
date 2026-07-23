@@ -11,7 +11,6 @@ pub mod layers;
 pub mod server;
 pub mod model;
 pub mod rpc;
-pub mod state;
 pub mod worker;
 pub mod store;
 
@@ -25,7 +24,7 @@ use crate::agent::AgentId;
 use crate::agent::status::{AgentResponse, AgentStatus};
 use crate::hitl::{Answer, Question};
 use crate::pubsub::PubSubMessage;
-use crate::session::state::{
+use crate::state_graph::{
     StateGraph,
     executable::{OrchestrationStrategy, ResolvedChildTask},
     frame::{GraphFrame, GraphFrameId, GraphResponse},
@@ -60,19 +59,19 @@ pub enum SessionEvent {
     Updated { id: SessionId },
     Removed { id: SessionId },
     FrameStatusChanged { session_id: SessionId, agent_id: AgentId, status: AgentStatus },
-    /// Progression d'un [`crate::session::state::frame::GraphFrame`] —
+    /// Progression d'un [`crate::state_graph::frame::GraphFrame`] —
     /// `current_node` (le nœud du curseur prêt à avancer, s'il y en a un)
     /// est inclus directement pour observer la progression du graphe sans
     /// refaire un `GetSession` à chaque évènement.
     GraphStatusChanged { session_id: SessionId, graph_id: GraphFrameId, status: AgentStatus, current_node: Option<String> },
-    /// Progression d'une [`crate::session::state::orchestration::OrchestrationFrame`] —
+    /// Progression d'une [`crate::state_graph::orchestration::OrchestrationFrame`] —
     /// `pending` : nombre d'enfants encore attendus.
     OrchestrationStatusChanged { session_id: SessionId, orchestration_id: OrchestrationFrameId, status: AgentStatus, pending: usize },
-    /// Cycle de vie d'un [`crate::session::state::hitl::HitlFrame`] — émis à
+    /// Cycle de vie d'un [`crate::state_graph::hitl::HitlFrame`] — émis à
     /// la fois par [`rpc::PushHitl`] (`status: Pending`) et
     /// [`rpc::ReportUserInput`] (`status: Answered`), observable
     /// indépendamment de l'`AgentFrame`/`GraphFrame` propriétaire (voir
-    /// [`crate::session::state::hitl::HitlFrame::owner`]).
+    /// [`crate::state_graph::hitl::HitlFrame::owner`]).
     HitlStatusChanged { session_id: SessionId, hitl_id: HitlFrameId, status: HitlFrameStatus },
     LogAppended { session_id: SessionId, log_id: SessionLogId, text: String },
     VarsPatched { session_id: SessionId },
@@ -324,7 +323,7 @@ pub struct SessionReportGraphRunRequest {
 }
 
 /// Charge utile de [`rpc::PushOrchestration`] : crée une nouvelle
-/// [`crate::session::state::orchestration::OrchestrationFrame`] et ses
+/// [`crate::state_graph::orchestration::OrchestrationFrame`] et ses
 /// enfants — voir [`server::push_orchestration`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionPushOrchestrationRequest {
@@ -336,7 +335,7 @@ pub struct SessionPushOrchestrationRequest {
 }
 
 /// Charge utile de [`rpc::PushHitl`] : `owner` pousse un nouveau
-/// [`crate::session::state::hitl::HitlFrame`] identifié par `hitl_id` — voir
+/// [`crate::state_graph::hitl::HitlFrame`] identifié par `hitl_id` — voir
 /// [`server::push_hitl`]. `owner_graph_update`, si fourni, est la version
 /// déjà mise à jour (curseur en `Yielding(WaitingHitl)`) du [`GraphFrame`]
 /// appelant, sur le même modèle anti-course que
@@ -351,7 +350,7 @@ pub struct SessionPushHitlRequest {
 }
 
 /// Charge utile de [`rpc::ReportUserInput`] : répond au
-/// [`crate::session::state::hitl::HitlFrame`] `hitl_id`, ou — si `None` — au
+/// [`crate::state_graph::hitl::HitlFrame`] `hitl_id`, ou — si `None` — au
 /// seul `AgentFrame` de `session_id` actuellement `Yielding(WaitingHitl)`
 /// (input spontané, voir [`server::report_user_input`] pour la résolution et
 /// ses cas d'erreur).
