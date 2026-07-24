@@ -13,9 +13,12 @@ use crate::{agent::AgentId, rpc::RpcError, secret::SecretError, tools::{ToolDefi
 
 pub mod catalog;
 pub mod model;
-pub mod client;
-#[cfg(feature = "catalog")]
-pub mod server;
+mod client;
+#[cfg(feature = "model-server")]
+mod server;
+#[cfg(feature = "model-server")]
+pub use server::ModelServer;
+
 pub mod rpc;
 
 pub use model::{ModelId, Model, EncryptedModel};

@@ -3,22 +3,19 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
+use json_patch::Patch;
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    di::{Get, Resolve},
-     expert::{ExpertId, client::ExpertClient}, 
-     graph::{GraphInstanceId, server::GraphServer}, 
-     id::ID, 
-     network::worker::client::WorkerClient
+    di::{Get, Resolve}, expert::{ExpertId, client::ExpertClient}, graph::{Goto, GraphFrameId, Halt, server::GraphServer}, id::ID, model::client::ModelClient, network::worker::client::WorkerClient, state::{State, StateTransaction}
 };
 
 pub type NodeName = String;
 
-pub type NodeExecutor<S, D>  = Arc<dyn Fn(NodeContext<D>, S) -> BoxFuture<'static, anyhow::Result<NodeOutcome<S>>>>;
-pub type NodeFactory<S, D> = Arc<dyn Fn(Value) -> NodeExecutor<S, D>>; 
+pub type NodeExecutor<D>  = Arc<dyn Fn(NodeContext<D>, State) -> BoxFuture<'static, anyhow::Result<NodeOutcome>>>;
+pub type NodeFactory<D> = Arc<dyn Fn(Value) -> NodeExecutor<D>>; 
 
 pub struct NodeDefinition {
     name: NodeName,
@@ -29,33 +26,34 @@ pub type NodeId = ID;
 
 #[derive(Clone)]
 pub struct NodeContext<D> {
-    pub graph_id: GraphInstanceId,
+    pub graph_id: GraphFrameId,
     pub thread_id: ID,
     pub node_id: NodeId,
     pub step: u32,
     pub deps: D
 }
 
+
 /// Ce qu'une node décide après son exécution.
-pub enum NodeOutcome<S> {
+pub enum NodeOutcome {
     /// Continue vers la node suivante déterminée par l'edge enregistrée
     /// pour la node courante (Direct, Conditional ou Fanout).
-    Continue(S),
-    /// Court-circuite la table d'edges et saute explicitement vers une node
-    /// donnée. Utile pour une node "routeur" qui encode elle-même sa logique
-    /// de décision plutôt que de la déléguer à une closure `conditional_edge`.
-    Goto(S, NodeId),
+    Continue(Vec<Patch>),
+    Command {
+        state: State,
+        goto: Goto
+    },
     /// Termine l'exécution du graphe immédiatement avec cet état final.
-    Halt(S),
+    Halt(Halt),
 }
 
 #[async_trait]
-pub trait Nodable<S, D>: Sized + Clone + Send + Sync + 'static where Self: From<Self::Parameters> {
+pub trait Nodable<D>: Sized + Clone + Send + Sync + 'static where Self: From<Self::Parameters> {
     const NAME: &str;
     type Parameters: DeserializeOwned + JsonSchema;
 
-    fn register(server: &GraphServer<S, D>) {
-        let schema = schema_for!(<Self as Nodable<S,D>>::Parameters);
+    fn register(server: &GraphServer<D>) {
+        let schema = schema_for!(<Self as Nodable<D>>::Parameters);
 
         server.register_node_factory(
             Self::NAME, 
@@ -67,8 +65,8 @@ pub trait Nodable<S, D>: Sized + Clone + Send + Sync + 'static where Self: From<
     async fn execute(
         self, 
         ctx: NodeContext<D>, 
-        state: S
-    ) -> anyhow::Result<NodeOutcome<S>>;
+        state: StateTransaction
+    ) -> anyhow::Result<NodeOutcome>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -81,17 +79,20 @@ impl From<ExpertId> for ExpertNode {
 }
 
 #[async_trait]
-impl<S,D> Nodable<S, D> for ExpertNode where D: Resolve<ExpertClient> + Get<WorkerClient>  
+impl<D> Nodable<D> for ExpertNode where D: Resolve<ExpertClient> + Get<WorkerClient> + Resolve<ModelClient>
 {
     type Parameters = ExpertId;
     const NAME: &str = "expert";
 
-    async fn execute(self, ctx: NodeContext<D> , state: S) -> anyhow::Result<NodeOutcome<S> >  {
+    async fn execute(self, ctx: NodeContext<D>, state: StateTransaction) -> anyhow::Result<NodeOutcome>  {
         let experts: ExpertClient = ctx.deps.resolve();
         let worker: WorkerClient = ctx.deps.get();
+        let models: ModelClient = ctx.deps.resolve();
 
         let expert = experts.get(self.0).await?;
+        let model = models.get(expert.model_id).await?;
+        
 
-        Ok(NodeOutcome::Continue(state))
+        Ok(NodeOutcome::Continue(state.into()))
     }
 }

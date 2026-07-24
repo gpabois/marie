@@ -1,101 +1,66 @@
-use std::{sync::Arc, collections::HashMap};
-use futures::{StreamExt, sink::SinkExt, stream::{BoxStream, SelectAll}};
+use std::{collections::HashMap, ops::Deref, sync::Arc};
+
+use futures::{SinkExt, StreamExt, stream::{BoxStream, SelectAll}};
+use libp2p::{PeerId, rendezvous::Namespace};
 use parking_lot::Mutex;
 use sha2::{Digest, Sha256};
-use libp2p::{PeerId, Swarm, rendezvous::Namespace};
 use tokio::{select, sync::mpsc, time::interval};
-use typed_builder::TypedBuilder;
 
-use crate::{layer::Layer, network::{MarieBehaviour, protocol::{NetworkCommand, NetworkEvent}}, sink::SinkBoxExt};
+use crate::{di::{Factory, Get}, layer::Layer, network::{LocalPeerId, Network, protocol::{NetworkCommand, NetworkEvent}}};
 
-#[derive(TypedBuilder)]
-pub struct BootstrapArgs {
-    local_peer_id: PeerId,
-    #[builder(default)]
-    namespaces: Vec<Namespace>
-}
+pub trait AnnuaryStrategy: Send + Sync + 'static {
+    fn register_to_namespaces(&self, namespaces: Vec<String>);
+    fn ns_peers(&self, namespace: &str) -> Vec<PeerId>;
 
-pub struct BootstrapClientActor;
+    fn select(&self, namespace: &str, key: &[u8]) -> Vec<PeerId> {
+        let peers = self.ns_peers(namespace);
 
-pub enum PeerSelection {
-    Local,
-    Peer(PeerId)
+        let mut peers: Vec<(PeerId, Vec<u8>)> = peers.iter()
+            .map(|peer| {
+                let mut hasher = Sha256::default();
+                hasher.update(key);
+                hasher.update(peer.to_bytes());
+                let score = hasher.finalize().to_vec();
+                
+                (*peer, score)
+            })
+            .collect();
+
+        peers.sort_by_key(|(_, score)| score.clone());
+        peers.into_iter().map(|(id, _)| id).collect()
+    }
+
 }
 
 #[derive(Clone)]
-pub struct BootstrapClient {
-    local_peer_id: PeerId, 
+pub struct Annuary(Arc<dyn AnnuaryStrategy>);
+
+impl Deref for Annuary {
+    type Target = dyn AnnuaryStrategy;
+
+    fn deref(&self) -> &Self::Target {
+        self.0.deref()
+    }
+}
+
+pub struct LoopbackAnnuary(LocalPeerId);
+
+impl AnnuaryStrategy for LoopbackAnnuary {
+    fn ns_peers(&self, namespace: &str) -> Vec<PeerId> {
+        vec![*self.0]
+    }
+
+    fn select(&self, namespace: &str, key: &[u8]) -> Vec<PeerId> {
+        vec![*self.0]
+    }
+    
+    fn register_to_namespaces(&self, namespaces: Vec<String>) {}
+}
+
+#[derive(Clone)]
+pub struct SwarmAnnuary {
     tracked: Arc<Mutex<HashMap<String, Vec<PeerId>>>>,
     cmd_tx: mpsc::UnboundedSender<Command>
-}
-
-impl BootstrapClient {
-    pub fn register_to_namespaces(&self,  namespaces: impl IntoIterator<Item=Namespace>) {
-        let _ = self.cmd_tx.send(Command::RegisterToNamespaces(namespaces.into_iter().collect()));
-    }
-
-    pub fn peers(&self, namespace: impl ToString) -> Vec<PeerId> {
-        let guard = self.tracked.lock();
-        guard.get(&namespace.to_string()).cloned().unwrap_or_default()
-    }
-
-    /// Selectionne une paire parmis le sous-cluster de manière déterministe 
-    /// et décentralisée par la méthode du `Hachage cohérent`.
-    pub fn select_peer(&self, namespace: impl ToString, id: impl AsRef<[u8]>) -> Option<PeerId> {
-        let peers = self.peers(namespace);
-        
-        peers.iter()
-            .map(|peer| {
-                let mut hasher = Sha256::default();
-                hasher.update(id.as_ref());
-                hasher.update(peer.to_bytes());
-                let score = hasher.finalize();
-
-                (*peer, score)
-            })
-            .max_by(|(_, score_a), (_, score_b)| score_a.cmp(score_b))
-            .map(|(peer, _)| peer)
-    }
-
-    pub fn select_peer_with_local(&self, namespace: impl ToString, id: impl AsRef<[u8]>) -> PeerSelection {
-        let mut peers = self.peers(namespace);
-        peers.push(self.local_peer_id);
-
-        peers.iter()
-            .map(|peer| {
-                let mut hasher = Sha256::default();
-                hasher.update(id.as_ref());
-                hasher.update(peer.to_bytes());
-                let score = hasher.finalize();
-
-                (*peer, score)
-            })
-            .max_by(|(_, score_a), (_, score_b)| score_a.cmp(score_b))
-            .map(|(peer, _)| {
-                if peer == self.local_peer_id {
-                    PeerSelection::Local
-                } else {
-                    PeerSelection::Peer(peer)
-                }
-            })
-            .unwrap_or(PeerSelection::Local)
-    }
-}
-
-fn create_timer_stream(duration: std::time::Duration, args: (String, PeerId)) -> BoxStream<'static, (String, PeerId)> {
-    let mut timer = interval(duration);
-    // Optionnel : évite l'accumulation de ticks si le CPU est surchargé
-    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-
-    Box::pin(futures::stream::unfold((timer, args), |(mut t, args)| async move {
-        t.tick().await; // Attend le prochain tick
-        let item = args.clone();
-        Some((item, (t, args))) // Retourne l'action et l'état (timer + args) pour le prochain tour
-    }))
-}
-
-enum Command {
-    RegisterToNamespaces(Vec<Namespace>)
 }
 
 struct NsPeerInfo {
@@ -103,18 +68,40 @@ struct NsPeerInfo {
     expires_at: std::time::Instant,
 }
 
-impl BootstrapClientActor {
-    pub fn new(layer: impl Layer<Send = NetworkCommand, Received = NetworkEvent>, args: BootstrapArgs) 
-        -> BootstrapClient
-    {
-        let (tx, rx) = layer.split();
+impl AnnuaryStrategy for SwarmAnnuary {
+    fn ns_peers(&self, namespace: &str) -> Vec<PeerId> {
+        let guard = self.tracked.lock();
+        guard.get(&namespace.to_string()).cloned().unwrap_or_default()
+    }
 
-        let mut tx = tx.boxed_sink();
-        let mut rx = rx.boxed();
+    fn register_to_namespaces(&self, namespaces: Vec<String>) {
+        let _ = self.cmd_tx.send(Command::RegisterToNamespaces(
+            namespaces
+            .into_iter()
+            .map(Namespace::new)
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap()
+        ));
+    }
+}
 
+impl<C> Factory<C> for SwarmAnnuary 
+    where C: Get<Network>
+{
+    fn create(container: &C) -> Self {
+        Self::new(container)
+    }
+}
+
+impl SwarmAnnuary {
+    pub fn new<C>(container: &C) -> SwarmAnnuary
+        where C: Get<Network>
+    {   
+        let net: Network = container.get();
+        let (mut tx, mut rx) = net.layer().boxed_split();
         let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
 
-        let mut namespaces: Vec<Namespace> = args.namespaces;
+        let mut namespaces: Vec<Namespace> = Default::default();
 
         let state: Arc<Mutex<HashMap<String, Vec<PeerId>>>> = Default::default();
 
@@ -201,14 +188,26 @@ impl BootstrapClientActor {
             }
         });
 
-        BootstrapClient{
+        Self {
             cmd_tx,
-            local_peer_id: args.local_peer_id, 
             tracked: state
         }
     }
 }
 
-pub async fn start_bootstrap() -> Result<Swarm<MarieBehaviour>, anyhow::Error> {
-    todo!()
+fn create_timer_stream(duration: std::time::Duration, args: (String, PeerId)) -> BoxStream<'static, (String, PeerId)> {
+    let mut timer = interval(duration);
+    // Optionnel : évite l'accumulation de ticks si le CPU est surchargé
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+    Box::pin(futures::stream::unfold((timer, args), |(mut t, args)| async move {
+        t.tick().await; // Attend le prochain tick
+        let item = args.clone();
+        Some((item, (t, args))) // Retourne l'action et l'état (timer + args) pour le prochain tour
+    }))
+}
+
+
+enum Command {
+    RegisterToNamespaces(Vec<Namespace>)
 }

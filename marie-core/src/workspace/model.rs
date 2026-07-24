@@ -1,12 +1,13 @@
 use std::{collections::HashMap, fmt, str::FromStr};
 
 use bytemuck::{Pod, Zeroable};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{id::ID, session::SessionId};
 
-#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
 #[repr(C)]
 pub struct WorkspaceId(ID);
 

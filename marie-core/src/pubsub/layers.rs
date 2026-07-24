@@ -1,7 +1,7 @@
 use futures::{SinkExt, StreamExt, stream::BoxStream};
 use libp2p::gossipsub::Topic;
 
-use crate::{layer::{Layer, LayerChain}, network::actor::{NetworkCommand, NetworkEvent}, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt}};
+use crate::{layer::{Layer, LayerChain}, network::protocol::{NetworkCommand, NetworkEvent}, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt}};
 
 pub struct PubSubLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 

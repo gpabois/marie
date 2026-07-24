@@ -264,7 +264,7 @@ impl MarieGatewayActor {
                 Ok(()) => E::SessionLogAppended(session_id),
                 Err(err) => E::CommandFailed { reason: err.to_string() },
             },
-            C::QuerySessionVars { session_id, path } => match self.sessions.query_vars(session_id, path).await {
+            C::QuerySessionVars { session_id, path } => match self.sessions.query_state(session_id, path).await {
                 Ok(values) => E::SessionVarsQueried { session_id, values },
                 Err(err) => E::CommandFailed { reason: err.to_string() },
             },

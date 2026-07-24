@@ -3,61 +3,32 @@ use std::sync::Arc;
 use futures::channel::oneshot;
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
-use libp2p::rendezvous::{self, Namespace, Ttl};
+use libp2p::{StreamProtocol, Swarm, rendezvous};
+use libp2p::swarm::NetworkBehaviour;
 use libp2p::{gossipsub, identify, mdns, request_response};
-use libp2p::{PeerId, swarm::SwarmEvent};
+use libp2p::swarm::SwarmEvent;
 use tokio::sync::watch;
 use tokio::{select, sync::{broadcast, mpsc}};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
 
-use crate::layer::Layer;
-use crate::network::mux::Frame;
+use crate::layer::{BoxLayer, Layer};
+use crate::network::{LocalPeerId, NetworkStrategy, mux};
 use crate::network::peer::NodeKind;
 use crate::{
-    network::MarieSwarm,
+    network::protocol::{NetworkCommand, NetworkEvent},
 };
 
-pub enum NetworkCommand {
-    Listen(oneshot::Sender<()>),
-    SendFrame(Frame),
-    Subscribe(gossipsub::IdentTopic),
-    Publish {
-        topic: gossipsub::IdentTopic,
-        payload: Vec<u8>
-    },
-    /// Enregistre le pair dans un espace de nom
-    /// auprès du serveur bootstrap
-    RegisterPeer {
-        namespaces: Vec<Namespace>,
-        bootstrap_peer_id: PeerId,
-        ttl: Option<Ttl>
-    },
-    Shutdown,
+
+#[derive(NetworkBehaviour)]
+struct Behaviour {
+    pub mdns: mdns::tokio::Behaviour,
+    pub identify: identify::Behaviour,
+    pub pub_sub: gossipsub::Behaviour,
+    pub rendezvous: rendezvous::client::Behaviour,
+    pub oneway: request_response::json::Behaviour<mux::Frame, ()>
 }
 
-
-#[derive(Clone)]
-pub enum NetworkEvent {
-    ReceivedFrame(Frame),
-    BootstrapDiscovered {
-        peer_id: PeerId
-    },
-    NamespacePeerRegistred {
-        namespace: Namespace,
-        peer_id: PeerId,
-        ttl: Ttl
-    },
-    PeerDisconnected {
-        peer_id: PeerId,
-    },
-    PubSubReceived {
-        id: String,
-        topic: String,
-        data: Vec<u8>,
-        source: PeerId,
-    }
-}
 
 /// Capacité du canal de diffusion des [`NetworkEvent`] (voir
 /// [`NetworkClient::subscribe_events`]). Un abonné qui prend trop de retard
@@ -148,17 +119,36 @@ impl Drop for Handle {
 }
 
 #[derive(Clone)]
-pub struct Network {
+pub struct SwarmNetwork {
     shutdown_signal: watch::Receiver<bool>,
     commands: mpsc::UnboundedSender<NetworkCommand>,
     /// Diffusion des [`NetworkEvent`] de ce nœud — voir [`Self::subscribe_events`].
     events: broadcast::Sender<NetworkEvent>,
     /// Identité libp2p de ce nœud — voir [`Self::decrypt_secret`].
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     handle: Arc<Handle>
 }
 
-impl Network {
+impl SwarmNetwork {
+    pub fn new(kind: NodeKind) -> anyhow::Result<Self> {
+        let swarm = create_swarm(kind)?;
+        Ok(Actor::create(swarm, kind))
+    }
+}
+
+impl NetworkStrategy for SwarmNetwork {
+    fn layer(&self) -> crate::layer::BoxLayer<NetworkCommand, NetworkEvent, anyhow::Error> {
+        let sender = NetworkSender(self.commands.clone());
+        let receiver = NetworkReceiver(BroadcastStream::new(self.events.subscribe()));
+        BoxLayer::new(sender, receiver)
+    }
+
+    fn local_id(&self) -> LocalPeerId {
+        self.local_peer_id
+    }
+}
+
+impl SwarmNetwork {
     /// Récupère la couche de transport du réseau
     pub fn transport(&self) -> NetworkLayer {
         let sender = NetworkSender(self.commands.clone());
@@ -197,10 +187,10 @@ impl Network {
         let _ = self.commands.send(NetworkCommand::Shutdown);
     }
 }
-pub struct NetworkActor {
+struct Actor {
     shutdown_signal: watch::Sender<bool>,
     kind: NodeKind,
-    swarm: MarieSwarm,
+    swarm: Swarm<Behaviour>,
     // Diffusion des `NetworkEvent` (voir `NetworkClient::subscribe_events`)
     events_tx: broadcast::Sender<NetworkEvent>,
     // Network command to execute
@@ -208,17 +198,17 @@ pub struct NetworkActor {
     commands_tx: mpsc::UnboundedSender<NetworkCommand>,
 }
 
-impl NetworkActor {
+impl Actor {
     #[must_use]
-    pub fn create(swarm: MarieSwarm, kind: NodeKind) -> Network {
+    pub fn create(swarm: Swarm<Behaviour>, kind: NodeKind) -> SwarmNetwork {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
         let (shutdown_subscribers, shutdown_signal) = watch::channel(false);
 
-        let local_peer_id = *swarm.local_peer_id();
+        let local_peer_id = LocalPeerId(*swarm.local_peer_id());
         
 
-        let client = Network {
+        let client = SwarmNetwork {
             shutdown_signal,
             commands: commands_tx.clone(),
             events: events_tx.clone(),
@@ -226,7 +216,7 @@ impl NetworkActor {
             handle: Arc::new(Handle(commands_tx.clone()))
         };
 
-        let actor = NetworkActor {
+        let actor = Actor {
             shutdown_signal: shutdown_subscribers,
             kind,
             swarm,
@@ -246,7 +236,7 @@ impl NetworkActor {
         use SwarmEvent::Behaviour;
         use request_response::Event as ReqResEvent;
         use identify::Event as IdEvent;
-        use super::MarieBehaviourEvent::{PubSub, Identify, Mdns, Oneway, Rendezvous};
+        use BehaviourEvent::{PubSub, Identify, Mdns, Oneway, Rendezvous};
 
 
         loop {
@@ -364,3 +354,33 @@ impl NetworkActor {
         Ok(())
     }
 }
+
+pub fn create_swarm(kind: NodeKind) -> Result<Swarm<Behaviour>, anyhow::Error> {
+    let swarm = libp2p::SwarmBuilder::with_new_identity()
+        .with_tokio()
+        .with_tcp(libp2p::tcp::Config::default(), libp2p::noise::Config::new, libp2p::yamux::Config::default)?
+        .with_behaviour(|key| {
+            let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id()).unwrap();
+            let id_config = identify::Config::new("/marie/id/1.0.0".to_string(), key.public())
+                .with_agent_version(format!("marie/{}/1.0.0", kind));
+            
+            let identify = identify::Behaviour::new(id_config);
+            
+            let pub_sub = gossipsub::Behaviour::new(
+                gossipsub::MessageAuthenticity::Signed(key.clone()), gossipsub::Config::default()
+            ).unwrap();
+
+            let oneway = request_response::json::Behaviour::new([
+                (StreamProtocol::new("/marie/rpc/1.0.0"), request_response::ProtocolSupport::Full)
+                ], request_response::Config::default()
+            );
+
+            let rendezvous = rendezvous::client::Behaviour::new(key.clone());
+
+            Behaviour { mdns, identify, pub_sub, oneway, rendezvous }
+        })?
+        .build();
+
+    Ok(swarm)
+}
+

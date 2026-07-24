@@ -1,25 +1,29 @@
 use libp2p::PeerId;
 
-use crate::{model::{Model, ModelError::{self, SecretError}, NS_MODEL, catalog::{ModelChangeSet, ModelId}, rpc::{GetModel, InsertModel, ListModel, RemoveModel, UpdateModel}}, network::bootstrap::BootstrapClient, rpc::{RpcClient, Void}, secret::{Encryptable, SecretManager}};
+use crate::{di::{Factory, Get}, model::{Model, ModelError::{self, SecretError}, NS_MODEL, catalog::{ModelChangeSet, ModelId}, rpc::{GetModel, InsertModel, ListModel, RemoveModel, UpdateModel}}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, Void}, secret::{Encryptable, SecretManager}};
 
 #[derive(Clone)]
 pub struct ModelClient {
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     rpc: RpcClient,
     secret: SecretManager,
     bootstrap: BootstrapClient
 }
 
-impl ModelClient {
-    #[must_use]
-    pub fn new(local_peer_id: PeerId, rpc: RpcClient, bootstrap: BootstrapClient, secret: SecretManager) -> Self {
+impl<C> Factory<C> for ModelClient 
+    where C: Get<RpcClient> + Get<SecretManager> + Get<BootstrapClient> + Get<LocalPeerId>
+{
+    fn create(container: &C) -> Self {
         Self {
-            rpc,
-            secret,
-            bootstrap,
-            local_peer_id
+            local_peer_id: container.get(),
+            rpc: container.get(),
+            secret: container.get(),
+            bootstrap: container.get()
         }
     }
+}
+
+impl ModelClient {
 
     pub async fn get(&self, id: impl Into<ModelId>) -> Result<super::model::Model, ModelError> {
         let id = id.into();

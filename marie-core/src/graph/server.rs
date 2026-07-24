@@ -3,20 +3,20 @@ use std::{collections::HashMap, sync::Arc};
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 
-use crate::{di::{Factory, Get, Resolve}, expert::client::ExpertClient, graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, network::worker::client::WorkerClient};
+use crate::{di::{Factory, Get, Resolve}, expert::client::ExpertClient, graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, model::client::ModelClient, network::worker::client::WorkerClient};
 
 
 #[derive(Clone)]
-pub struct GraphServer<S, D> 
+pub struct GraphServer<D> 
 {
     deps: D,
     nodes: Arc<Mutex<HashMap<NodeName, NodeDefinition>>>,
-    node_executors: Arc<Mutex<HashMap<NodeName, NodeFactory<S,D>>>>
+    node_executors: Arc<Mutex<HashMap<NodeName, NodeFactory<D>>>>
 }
 
-impl<S, D> Factory<D> for GraphServer<S, D> 
+impl<D> Factory<D> for GraphServer<D> 
     where
-        D: Resolve<ExpertClient> + Get<WorkerClient> + Clone + Send + Sync + 'static
+        D: Resolve<ExpertClient> + Resolve<ModelClient> + Get<WorkerClient> + Clone + Send + Sync + 'static
 {
     fn create(container: &D) -> Self {
         let server = Self {
@@ -31,7 +31,7 @@ impl<S, D> Factory<D> for GraphServer<S, D>
     }
 }
 
-impl<S, D> GraphServer<S, D> {
+impl<D> GraphServer<D> {
     pub fn register_node_factory<F, Args, N>(
         &self, 
         name: impl ToString, 
@@ -39,7 +39,7 @@ impl<S, D> GraphServer<S, D> {
         schema: serde_json::Value
     ) where  
         F: Fn(Args) -> N,
-        N: Nodable<S, D>,
+        N: Nodable<D>,
         Args: DeserializeOwned {
         let name = name.to_string();
         let factory = Arc::new(|args: serde_json::Value| {

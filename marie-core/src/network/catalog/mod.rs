@@ -6,7 +6,7 @@ use crate::{
     layer::LayerExt as _,
     model::{NS_MODEL, server::ModelServer},
     network::{
-        actor::NetworkActor,
+        swarm::Actor,
         bootstrap::{self, client::BootstrapArgs},
         create_swarm,
         worker::{self, client::WorkerClientArgs, layers::WorkerEventLayer},
@@ -14,7 +14,7 @@ use crate::{
     pubsub::layers::PubSubLayer,
     rpc,
     secret::SecretManager,
-    session::{self, server::SessionServerArgs, store::SessionStoreActor},
+    session::{self, server::SessionServerArgs, store::Actor},
     store::{PgStore, run_migrations},
     tools::{NS_TOOL, layers::ToolEventLayer, server::{ToolServer, ToolServerActor}},
     workspace::{self, server::WorkspaceServerArgs, store::WorkspaceStoreActor},
@@ -55,7 +55,7 @@ pub async fn start_catalog(args: CatalogArgs) -> Result<(), anyhow::Error> {
     let swarm = create_swarm(Catalog)?;
     let local_peer_id = *swarm.local_peer_id();
 
-    let net = NetworkActor::create(swarm, Catalog);
+    let net = Actor::create(swarm, Catalog);
 
     run_migrations(args.store.pool()).await?;
 
@@ -109,7 +109,7 @@ pub async fn start_catalog(args: CatalogArgs) -> Result<(), anyhow::Error> {
             .rpc_server(rpc_server.clone())
             .bootstrap(bootstrap.clone())
             .worker(worker_client)
-            .store(SessionStoreActor::create(args.store.clone()))
+            .store(Actor::create(args.store.clone()))
             .build(),
     );
 

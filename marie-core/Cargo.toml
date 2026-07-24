@@ -61,21 +61,13 @@ zeroize = { version = "1", features = ["derive"] }
 chrono = { version = "0.4", features = ["serde"] }
 
 typed-builder = "0.23.2"
-# Filesystem de session (voir persistency::filesystem) : provider abstrait,
-# mémoire ou S3/compatible S3 (MinIO, etc.) — optionnel, seul le rôle
-# `catalog` en a besoin (voir la feature du même nom ci-dessous).
 object_store = { version = "0.14.0", features = ["aws"], optional = true }
-# Store (voir persistency::store) adossé à PostgreSQL, alternative à RedbStore
-# pour les déploiements voulant un stockage centralisé/administré plutôt
-# qu'un fichier redb embarqué par nœud — optionnel, seul le rôle `catalog`
-# en a besoin (voir la feature du même nom ci-dessous).
 sqlx = { version = "0.9", default-features = false, optional = true, features = ["runtime-tokio", "tls-rustls-ring", "postgres", "migrate", "macros", "json", "chrono"] }
-# Utilisé par vfs::postgres::PostgresObjectStore pour manipuler le contenu
-# binaire des objets (`Bytes`) reçu/renvoyé par `object_store` — optionnel,
-# même feature que `object_store`/`sqlx` ci-dessus.
 bytes = { version = "1", optional = true }
 futures-util.workspace = true
-jsonpath_lib = "0.3.0"
+json-patch.workspace = true
+jsonpath-rust.workspace = true
+jsonschema.workspace = true
 schemars.workspace = true
 
 
@@ -96,3 +88,12 @@ worker = ["client"]
 catalog = ["client", "dep:sqlx", "dep:object_store", "dep:bytes"]
 # Raccourci pour démarrer un nœud complet (worker + catalogue).
 node = ["worker", "catalog"]
+rpc-server = []
+rpc-executor = ["rpc-server"]
+job-executor = []
+worker-server = ["job-executor"]
+worker-watchdog = []
+model-server = ["rpc-executor"]
+tools-server = ["rpc-executor"]
+tool-executor = ["job-executor"]
+postgres = []

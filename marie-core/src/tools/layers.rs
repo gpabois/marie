@@ -1,6 +1,6 @@
 use futures::{FutureExt, SinkExt, StreamExt, stream::BoxStream};
 
-use crate::{layer::{Layer, LayerChain}, network::worker::WorkerEvent, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt}, tools::ToolEvent};
+use crate::{layer::{Layer, LayerChain}, worker::WorkerEvent, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt}, tools::ToolEvent};
 
 pub struct ToolEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 

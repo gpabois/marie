@@ -24,6 +24,7 @@ use crate::agent::AgentId;
 use crate::agent::status::{AgentResponse, AgentStatus};
 use crate::hitl::{Answer, Question};
 use crate::pubsub::PubSubMessage;
+use crate::state::StateLocation;
 use crate::state_graph::{
     StateGraph,
     executable::{OrchestrationStrategy, ResolvedChildTask},
@@ -35,7 +36,7 @@ use crate::tools::{ToolCallId, ToolCallResult};
 
 pub use model::{Session, SessionId, SessionLog, SessionLogId};
 pub use rpc::{
-    AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession,
+    AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryState, RemoveSession,
     ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportUserInput, UpdateGraphStep, UpdateSession,
 };
 
@@ -197,7 +198,7 @@ impl TryFrom<PubSubMessage> for SessionEvent {
 /// [`layers::SessionEventLayer`] — mirroir de
 /// [`crate::network::worker::build_server`].
 #[cfg(feature = "catalog")]
-pub fn build_server(net: &crate::network::actor::Network, args: server::SessionServerArgs) -> server::SessionServer {
+pub fn build_server(net: &crate::network::Network args: server::SessionServerArgs) -> server::SessionServer {
     use crate::layer::{IntoService as _, LayerExt as _};
     use crate::pubsub::layers::PubSubLayer;
 
@@ -260,8 +261,8 @@ pub struct SessionInsertInLogRequest {
 /// traité comme un unique document JSON (ses clés de premier niveau
 /// devenant les champs de ce document, ex: `$.budget`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SessionVarsQueryRequest {
-    pub session_id: SessionId,
+pub struct SessionStateQueryRequest {
+    pub location: StateLocation,
     pub path: String,
 }
 

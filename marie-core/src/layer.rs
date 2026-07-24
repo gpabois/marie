@@ -2,6 +2,31 @@ use futures::{Sink, Stream, StreamExt, stream::BoxStream};
 
 use crate::sink::{BoxSink, SinkBoxExt};
 
+pub struct BoxLayer<S, R, E=anyhow::Error>(BoxSink<'static, S, E>, BoxStream<'static, R>);
+
+impl<S, R, E> BoxLayer<S, R, E> {
+    pub fn new(
+        tx: impl Sink<S, Error=E> + Sync + Send + 'static,
+        rx: impl Stream<Item=R> + Sync + Send + 'static
+    ) -> Self {
+        Self(tx.boxed_sink(), rx.boxed())
+    }
+}
+
+impl<S, R, E> Layer<E> for BoxLayer<S, R, E> 
+    where S: 'static, R: 'static, E: 'static
+{
+    type Send = S;
+    type Received = R;
+
+    type Sender = BoxSink<'static, S, E>;
+    type Receiver = BoxStream<'static, R>;
+
+    fn split(self) -> (Self::Sender, Self::Receiver) {
+        (self.0, self.1)
+    }
+}
+
 pub trait Layer<Error=anyhow::Error>: Sized {
     type Send;
     type Received;
@@ -31,3 +56,4 @@ pub trait LayerExt {
 }
 
 impl<T> LayerExt for T where T: Layer {}
+

@@ -3,7 +3,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::{
-    network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void}, session::SessionId, workspace::{
+    di::{Factory, Get, Resolve}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, session::SessionId, workspace::{
         NS_WORKSPACE, Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest, WorkspaceVarsRemoveRequest, rpc::{AddSession, GetWorkspace, InsertWorkspace, ListWorkspace, PatchVars, QueryVars, RemoveSession, RemoveVars, RemoveWorkspace},
     },
 };
@@ -30,16 +30,22 @@ pub enum WorkspaceError {
 /// comme pour les sessions.
 #[derive(Clone)]
 pub struct WorkspaceClient {
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     rpc: RpcClient,
     bootstrap: BootstrapClient,
 }
 
-impl WorkspaceClient {
-    #[must_use]
-    pub fn new(local_peer_id: PeerId, rpc: RpcClient, bootstrap: BootstrapClient) -> Self {
-        Self { rpc, bootstrap, local_peer_id }
+impl<C> Factory<C> for WorkspaceClient where C: Get<RpcClient> + Get<BootstrapClient> + Get<LocalPeerId> {
+    fn create(container: &C) -> Self {
+       Self {
+            local_peer_id: container.get(),
+            rpc: container.get(),
+            bootstrap: container.get()
+       }
     }
+}
+
+impl WorkspaceClient {
 
     /// Crée le workspace `id`, vide — raccourci de [`Self::insert`].
     pub async fn create(&self, id: impl Into<WorkspaceId>) -> Result<(), WorkspaceError> {

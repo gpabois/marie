@@ -1,6 +1,6 @@
 use futures::{Sink, SinkExt, Stream, StreamExt, stream::BoxStream};
 
-use crate::{layer::{Layer, LayerChain}, network::{mux::Frame, actor::{NetworkCommand::SendFrame, NetworkEvent, NetworkReceiver, NetworkSender}}, rpc::RpcMessage , sink::{BoxSink, SinkBoxExt}};
+use crate::{layer::{Layer, LayerChain}, network::{swarm::{NetworkReceiver, NetworkSender}, mux::Frame, protocol::{NetworkCommand::SendFrame, NetworkEvent}}, rpc::RpcMessage, sink::{BoxSink, SinkBoxExt}};
 
 
 /// Multiplexer de RPC sur le cluster Marie des appels RPC
@@ -48,59 +48,4 @@ impl RpcMuxLayer {
         RpcMuxLayer(tx, rx)
     }
 
-}
-
-pub struct RpcReceiver(NetworkReceiver);
-
-impl Stream for RpcReceiver {
-    type Item = RpcMessage;
-
-    fn poll_next(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Option<Self::Item>> {
-        match self.0.poll_next_unpin(cx) {
-            std::task::Poll::Ready(Some(NetworkEvent::ReceivedFrame(frame))) if frame.channel.as_str() == "rpc" => {
-                let mut msg: RpcMessage = serde_json::from_slice(&frame.payload).unwrap();
-                if msg.source().is_none() { msg.set_source(frame.source); }
-                std::task::Poll::Ready(Some(msg))
-            },
-            std::task::Poll::Ready(None) => std::task::Poll::Ready(None),
-            _ => std::task::Poll::Pending,
-        }
-    }
-    
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        (0, None)
-    }
-}
-
-pub struct RpcSender(NetworkSender);
-
-impl Sink<RpcMessage> for RpcSender {
-    type Error = anyhow::Error;
-
-    fn poll_ready(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_ready_unpin(cx)
-    }
-
-    fn start_send(mut self: std::pin::Pin<&mut Self>, item: RpcMessage) -> Result<(), Self::Error> {
-        let frame = Frame {
-            channel: "rpc/request".to_string(),
-            destination: item.destination(),
-            source: None,
-            payload: serde_json::to_vec(&item)?,
-        };
-
-        let cmd = SendFrame(frame);
-
-        self.0.start_send_unpin(cmd)?;
-
-        Ok(())
-    }
-
-    fn poll_flush(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_flush_unpin(cx)
-    }
-
-    fn poll_close(mut self: std::pin::Pin<&mut Self>, cx: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
-        self.0.poll_close_unpin(cx)
-    }
 }

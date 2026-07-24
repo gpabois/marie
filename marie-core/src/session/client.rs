@@ -6,9 +6,8 @@ use std::collections::HashMap;
 
 use crate::{
     agent::{AgentId, frame::AgentFrame, status::AgentResponse}, di::{Factory, Get, Resolve}, hitl::{Answer, Question}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, session::{
-        NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest,
-        rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
-    }, state_graph::{
+        NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionStateQueryRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsRemoveRequest, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryState, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
+    }, state::StateLocation, state_graph::{
         StateGraph,
         executable::{OrchestrationStrategy, ResolvedChildTask},
         frame::{GraphFrame, GraphFrameId, GraphResponse},
@@ -50,8 +49,8 @@ impl<D> Factory<D> for SessionClient
     fn create(container: &D) -> Self {
         Self {
             local_peer_id: container.get(),
-            rpc: container.resolve(),
-            bootstrap: container.resolve()
+            rpc: container.get(),
+            bootstrap: container.get()
         }
     }
 }
@@ -157,11 +156,11 @@ impl SessionClient {
 
     /// Évalue `path` (JSONPath) contre `Session::vars` de `session_id` et
     /// renvoie les valeurs trouvées — voir [`SessionVarsQueryRequest`].
-    pub async fn query_vars(&self, session_id: SessionId, path: impl Into<String>) -> Result<Vec<Value>, SessionError> {
+    pub async fn query_state(&self, location: StateLocation, path: impl Into<String>) -> Result<Vec<Value>, SessionError> {
         let catalog = self.select_catalog(session_id)?;
-        let request = SessionVarsQueryRequest { session_id, path: path.into() };
+        let request = SessionStateQueryRequest { session_id, path: path.into() };
 
-        self.rpc.invoke::<QueryVars>(request, [catalog]).await?.map_err(SessionError::Server)
+        self.rpc.invoke::<QueryState>(request, [catalog]).await?.map_err(SessionError::Server)
     }
 
     /// Remplace, dans `Session::vars` de `session_id`, chaque nœud

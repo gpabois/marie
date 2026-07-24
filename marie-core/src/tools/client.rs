@@ -2,8 +2,7 @@ use libp2p::PeerId;
 use thiserror::Error;
 
 use crate::{
-    network::bootstrap::BootstrapClient, rpc::{RpcClient, RpcError, Void},
-    tools::{NS_TOOL, ToolDefinition, ToolCall, ToolCallError, ToolId, rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool}}
+    di::{Factory, Get}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, tools::{NS_TOOL, ToolCall, ToolCallError, ToolDefinition, ToolId, rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool}}
 };
 
 #[derive(Debug, Error)]
@@ -30,21 +29,24 @@ pub enum ToolError {
 /// appels visant ce tool — voir `network::cp::DynamicRpcRegistry`.
 #[derive(Clone)]
 pub struct ToolClient {
-    local_peer_id: PeerId,
+    local_peer_id: LocalPeerId,
     rpc: RpcClient,
     bootstrap: BootstrapClient
 }
 
-impl ToolClient {
-    #[must_use]
-    pub fn new(local_peer_id: PeerId, rpc: RpcClient,bootstrap: BootstrapClient) -> Self {
+impl<C> Factory<C> for ToolClient 
+    where C: Get<LocalPeerId> + Get<RpcClient> + Get<BootstrapClient>
+{
+    fn create(container: &C) -> Self {
         Self {
-            local_peer_id,
-            rpc,
-            bootstrap
+            local_peer_id: container.get(),
+            rpc: container.get(),
+            bootstrap: container.get()
         }
     }
+}
 
+impl ToolClient {
     /// Récupère la déclaration d'un tool auprès du control plane.
     pub async fn get(&self, id: impl Into<ToolId>) -> Result<ToolDefinition, ToolError> {
         let id = id.into();

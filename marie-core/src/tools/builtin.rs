@@ -1,9 +1,10 @@
-use serde::Deserialize;
+use async_trait::async_trait;
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    session::{SessionId, client::SessionClient},
-    tools::ToolDefinition,
+    session::{SessionId, client::SessionClient}, state::StateLocation, tools::{ToolDefinition, Toolable}, worker::JobContext, workspace::{WorkspaceId, client::WorkspaceClient},
 };
 
 #[cfg(feature = "worker")]
@@ -11,6 +12,43 @@ use crate::tools::worker::ToolWorkerArgs;
 
 #[cfg(feature = "catalog")]
 use crate::tools::server::ToolServer;
+
+
+
+#[derive(Clone, Serialize, Deserialize, JsonSchema)]
+pub struct QueryStateArgs {
+    location: StateLocation,
+    path: String
+}
+
+#[derive(Clone)]
+pub struct QueryState{
+    workspaces: WorkspaceClient,
+    sessions: SessionClient
+}
+
+#[async_trait]
+impl<Cx> Toolable<Cx> for QueryState where Cx: Send + Sync + 'static {
+    const NAME: &str = "marie/tools/query-state";
+
+    const DESCRIPTION: &str = "Lit une ou plusieurs variables de la session courante via une expression JSONPath (ex: \"$.budget\", \
+            \"$.foo.bar[0]\") et renvoie la liste des valeurs trouvées (vide si aucune ne correspond).";
+
+    type Args = QueryStateArgs;
+    type Return = Vec<Value>;
+
+
+    #[cfg(feature = "tool-executor")]
+    async fn execute(self, cx: Cx, args: Self::Args) -> anyhow::Result<Self::Return> {
+        let session = match args.location {
+            StateLocation::InSession(session_id) => {
+                let session = self.sessions.query()
+            },
+            StateLocation::InWorkspace(workspace_id) => todo!(),
+            StateLocation::InGraph(graph_instance_id) => todo!(),
+        }
+    }
+}
 
 /// Lit une ou plusieurs variables de session via une expression JSONPath
 /// (voir [`crate::session::client::SessionClient::query_vars`]).
@@ -159,7 +197,7 @@ pub fn register_builtins_tools_executors(args: ToolWorkerArgs, sessions: Session
     let query_sessions = sessions.clone();
     let args = args.add(VARS_QUERY_TOOL, move |session_id: SessionId, request: VarsQueryArgs| {
         let sessions = query_sessions.clone();
-        async move { sessions.query_vars(session_id, request.path).await.map_err(anyhow::Error::from) }
+        async move { sessions.query_state(session_id, request.path).await.map_err(anyhow::Error::from) }
     });
 
     args.add(VARS_PATCH_TOOL, move |session_id: SessionId, request: VarsPatchArgs| {

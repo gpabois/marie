@@ -6,10 +6,10 @@ use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{job::Job, network::worker::JobContext, session::{SessionId, client::SessionClient}, tools::{JOB_TOOL_EXECUTE, ToolCall, ToolCallError, ToolCallResult, ToolId}};
+use crate::{job::Job, worker::JobContext, session::{SessionId, client::SessionClient}, tools::{JOB_TOOL_EXECUTE, ToolCall, ToolCallError, ToolCallResult, ToolId}};
 
 #[cfg(feature = "worker")]
-use crate::network::worker::server::WorkerServer;
+use crate::worker::WorkerServer;
 
 type ToolExecutor = Arc<dyn Fn(SessionId, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, anyhow::Error>> + Send + Sync + 'static>;
 
@@ -53,7 +53,7 @@ impl ToolWorkerArgs {
     }
 }
 
-#[cfg(feature = "worker")]
+#[cfg(feature = "tool-executor")]
 pub struct ToolWorker(Arc<Mutex<HashMap<ToolId, ToolExecutor>>>, SessionClient);
 
 #[cfg(feature = "worker")]

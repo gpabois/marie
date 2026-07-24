@@ -3,7 +3,8 @@ use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 use crate::{
     job::JobInstance,
     layer::Layer,
-    network::{bootstrap::BootstrapClient, worker::{NS_WORKER, RPC_SCHEDULE_JOB, WorkerEvent}},
+    network::bootstrap::BootstrapClient,
+    worker::{NS_WORKER, RPC_SCHEDULE_JOB, WorkerEvent},
     rpc::RpcServer,
     sink::SinkBoxExt
 };
@@ -15,9 +16,8 @@ use tokio::select;
 use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder)]
-pub struct WorkerServerArgs<Cx, B> where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static {
-    bootstrap: BootstrapClient,
-    rpc_server: RpcServer,
+pub struct WorkerServerArgs<'di, Di, Cx, B> where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static {
+    container: &'di Di,
     job_context_builder: B
 }
 

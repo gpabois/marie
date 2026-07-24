@@ -7,35 +7,30 @@ use tokio::{select, sync::{mpsc, oneshot}};
 use tracing::warn;
 use typed_builder::TypedBuilder;
 
-use crate::{id::IdGenerator, layer::Layer, rpc::{RemoteProcedureCall, RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult, register::RpcRegistry}};
+use crate::{
+    di::{Factory, Get}, id::IdGenerator, layer::{Layer, LayerExt}, network::{Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::{RemoteProcedureCall, RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}
+};
 
-struct RpcHandler {
-    sent_at: std::time::Instant,
-    tx: oneshot::Sender<RpcResult>
+#[derive(Clone)]
+pub struct RpcClient {
+    tx: mpsc::UnboundedSender<Command>,
+    id: Arc<IdGenerator>,
+    // used to stop the actor if the last client has been dropped
+    inner: Arc<RpcClientInner>
 }
 
-#[derive(Default)]
-pub struct RpcClientActor;
-
-struct RpcRequest {
-    id: RpcCallId,
-    call: RpcCall,
-    tx: oneshot::Sender<RpcResult>
+impl<C> Factory<C> for RpcClient where C: Get<Network> {
+    fn create(container: &C) -> Self {
+        let network: Network = container.get();
+        let actor = Actor::default();
+        actor.run(network.layer()
+            .chain::<FrameLayer, _>(())
+            .chain::<RpcMuxLayer, _>(())
+        )
+    }
 }
 
-enum RpcCommand {
-    Execute(RpcRequest),
-    Shutdown
-}
-
-enum RpcEvent {
-    OnReply(RpcReply),
-    OnAck(RpcAck),
-    OnRequest(RpcRequest),
-    Shutdown
-}
-
-impl RpcClientActor {
+impl Actor {
     pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcClient 
     {   
         let (tx, rx) = layer.split();
@@ -43,8 +38,8 @@ impl RpcClientActor {
         let mut incoming = Box::pin(rx);
 
         let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RpcCall>();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<RpcCommand>();
-        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<RpcEvent>();
+        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Event>();
 
         let ev_tx_1 = ev_tx.clone();
         let outcoming_task = tokio::spawn(async move {
@@ -64,7 +59,7 @@ impl RpcClientActor {
                                     result: RpcResult::Error(RpcError::NoExecutorFound)
                                 };
                                 
-                                let _ = ev_tx_1.send(RpcEvent::OnReply(reply));
+                                let _ = ev_tx_1.send(Event::OnReply(reply));
                                 continue;
                         }
 
@@ -80,7 +75,7 @@ impl RpcClientActor {
                                     result: RpcResult::Error(RpcError::Custom(String::default()))
                                 };
                                 
-                                let _ = ev_tx_1.send(RpcEvent::OnReply(reply));
+                                let _ = ev_tx_1.send(Event::OnReply(reply));
                             },
                             _ => {}
                         }
@@ -96,10 +91,10 @@ impl RpcClientActor {
                     Some(msg) = incoming.next() => {
                         match msg {
                             RpcMessage::Reply(reply) => {
-                                let _ = ev_tx_2.send(RpcEvent::OnReply(reply));
+                                let _ = ev_tx_2.send(Event::OnReply(reply));
                             },
                             RpcMessage::Ack(ack) => {
-                                let _ = ev_tx_2.send(RpcEvent::OnAck(ack));
+                                let _ = ev_tx_2.send(Event::OnAck(ack));
                             },
                             RpcMessage::Call(_) => {
                                 // le client ne reçoit jamais d'appel entrant
@@ -132,10 +127,10 @@ impl RpcClientActor {
                     },
                     Some(event) = ev_rx.recv() => {
                         match event {
-                            RpcEvent::Shutdown => {
+                            Event::Shutdown => {
                                 break;
                             }
-                            RpcEvent::OnRequest(request) => {
+                            Event::OnRequest(request) => {
                                 let hdlr = RpcHandler {
                                     sent_at: std::time::Instant::now(),
                                     tx: request.tx
@@ -144,12 +139,12 @@ impl RpcClientActor {
                                 ongoings.insert(request.id, hdlr);
                                 let _ = out_tx.send(request.call);
                             },
-                            RpcEvent::OnReply(reply) => {
+                            Event::OnReply(reply) => {
                                 if let Some(hdlr) = ongoings.remove(&reply.id) {
                                     let _ = hdlr.tx.send(reply.result);
                                 }
                             },
-                            RpcEvent::OnAck(ack) => {
+                            Event::OnAck(ack) => {
                                 if let Some(hdlr) = ongoings.get_mut(&ack.id) {
                                     hdlr.sent_at = std::time::Instant::now();
                                 }
@@ -177,22 +172,14 @@ impl RpcClientActor {
     }
 }
 
-struct RpcClientInner(mpsc::UnboundedSender<RpcCommand>);
+struct RpcClientInner(mpsc::UnboundedSender<Command>);
 
 impl Drop for RpcClientInner {
     fn drop(&mut self) {
-        use RpcCommand::Shutdown;
+        use Command::Shutdown;
 
         self.0.send(Shutdown);
     }
-}
-
-#[derive(Clone)]
-pub struct RpcClient {
-    tx: mpsc::UnboundedSender<RpcCommand>,
-    id: Arc<IdGenerator>,
-    // used to stop the actor if the last client has been dropped
-    inner: Arc<RpcClientInner>
 }
 
 #[derive(TypedBuilder)]
@@ -232,7 +219,7 @@ impl RpcClient {
     }
 
     pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
-        use RpcCommand::Execute;
+        use Command::Execute;
 
         let id = RpcCallId(self.id.next_id());
         let call = RpcCall {
@@ -259,4 +246,32 @@ impl RpcClient {
             RpcResult::Error(rpc_error) => Err(rpc_error),
         }       
     }
+}
+
+
+
+struct RpcHandler {
+    sent_at: std::time::Instant,
+    tx: oneshot::Sender<RpcResult>
+}
+
+#[derive(Default)]
+struct Actor;
+
+struct RpcRequest {
+    id: RpcCallId,
+    call: RpcCall,
+    tx: oneshot::Sender<RpcResult>
+}
+
+enum Command {
+    Execute(RpcRequest),
+    Shutdown
+}
+
+enum Event {
+    OnReply(RpcReply),
+    OnAck(RpcAck),
+    OnRequest(RpcRequest),
+    Shutdown
 }

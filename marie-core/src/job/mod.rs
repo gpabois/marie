@@ -2,7 +2,7 @@
 use async_trait::async_trait;
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use crate::{id::ID, network::worker::{JobContext, JobResult, server::WorkerServer}};
+use crate::{id::ID, worker::{JobContext, server::WorkerServer}};
 
 pub type JobId = ID;
 // Diffusé sur Gossipsub par le Control Plane
@@ -53,8 +53,10 @@ pub trait Job: Sized {
     type Args: Serialize + DeserializeOwned;
     type Return: Serialize + DeserializeOwned;
 
+    #[cfg(feature = "job-executor")]
     async fn execute(self, args: Self::Args, cx: JobContext) -> Result<Self::Return, anyhow::Error>;
 
+    #[cfg(feature = "job-executor")]
     fn register(self, worker: &mut WorkerServer<JobContext>) where Self: Clone + Send + Sync + 'static {
         let func = move |cx, args| {
             self.clone().execute(args, cx)

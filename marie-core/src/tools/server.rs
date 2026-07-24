@@ -5,7 +5,7 @@ use parking_lot::Mutex;
 
 use crate::{
     layer::Layer,
-    network::worker::{WorkerEvent, client::WorkerClient},
+    worker::{WorkerEvent, WorkerClient},
     rpc::{RemoteProcedureCall, RpcServer},
     sink::SinkBoxExt,
     tools::{

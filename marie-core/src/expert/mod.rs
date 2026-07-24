@@ -1,5 +1,5 @@
 pub mod catalog;
-pub mod client;
+mod client;
 pub mod model;
 pub mod rpc;
 #[cfg(feature = "catalog")]
@@ -7,6 +7,8 @@ pub mod server;
 
 pub use model::{ExpertId, Expert};
 pub use rpc::{GetExpert, InsertExpert, ListExpert, RemoveExpert, UpdateExpert};
+
+pub use client::ExpertClient;
 
 use crate::agent::Context;
 

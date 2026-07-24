@@ -1,5 +1,6 @@
 pub mod client;
-pub mod server;
+#[cfg(feature ="rpc-server")]
+mod server;
 pub mod register;
 pub mod layers;
 pub mod event;
@@ -12,10 +13,11 @@ use std::hash::Hash;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use crate::{id::ID, layer::{IntoService, Layer, LayerExt as _}, network::{actor::Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::register::RpcRegistry};
+use crate::id::ID;
 
-pub use server::{RpcServerActor, RpcServer};
-pub use client::{RpcClientActor, RpcClient};
+#[cfg(feature ="rpc-server")]
+pub use server::RpcServer;
+pub use client::RpcClient;
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RpcCallId(ID);
@@ -140,44 +142,16 @@ impl<'de> Deserialize<'de> for Void {
     }
 }
 
-
-impl<T> IntoService<RpcClient, ()> for T where T: Layer<Send=RpcMessage, Received=RpcMessage>{
-    fn into_service(self, _: ()) -> RpcClient {
-        let actor = RpcClientActor::default();
-        actor.run(self)
-    }
-}
-
-impl<T> IntoService<RpcServer, ()> for T where T: Layer<Send=RpcMessage, Received=RpcMessage> {
-    fn into_service(self, _: ()) -> RpcServer {
-        let actor = RpcServerActor::default();
-        actor.run(self)
-    }
-}
-
-pub fn build_server(network: &Network) -> RpcServer {
-    network.transport()
-        .chain::<FrameLayer, _>(())
-        .chain::<RpcMuxLayer, _>(())
-        .into_service(())
-}
-
-pub fn build_client(network: &Network) -> RpcClient {
-    network.transport()
-        .chain::<FrameLayer, _>(())
-        .chain::<RpcMuxLayer, _>(())
-        .into_service(())
-}
-
-
 #[async_trait]
 pub trait RemoteProcedureCall: Sized {
     const NAME: &'static str;
     type Args: Serialize + DeserializeOwned;
     type Return: Serialize + DeserializeOwned;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, args: Self::Args, caller: PeerId) -> Self::Return;
 
+    #[cfg(feature = "rpc-executor")]
     fn register(self, rpc: &mut RpcServer) where Self: Clone + Send + Sync + 'static {
         let func = move |args, caller| {
             self.clone().execute(args, caller)

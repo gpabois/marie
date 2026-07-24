@@ -4,6 +4,7 @@ use rand_xoshiro::{
     Xoshiro256PlusPlus,
     rand_core::{Rng as _, SeedableRng as _},
 };
+use schemars::JsonSchema;
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
@@ -16,10 +17,9 @@ pub struct IdGenerator {
     session_prefix: u64,
 }
 
-#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Hash, Debug, Clone, Copy, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
 #[repr(C)]
 pub struct ID(u64, u64);
-
 
 impl serde::Serialize for ID {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {

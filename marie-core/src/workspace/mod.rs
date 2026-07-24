@@ -146,7 +146,7 @@ impl TryFrom<PubSubMessage> for WorkspaceEvent {
 /// [`layers::WorkspaceEventLayer`] — miroir de
 /// [`crate::session::build_server`].
 #[cfg(feature = "catalog")]
-pub fn build_server(net: &crate::network::actor::Network, args: server::WorkspaceServerArgs) -> server::WorkspaceServer {
+pub fn build_server(net: &crate::network::swarm::SwarmNetwork, args: server::WorkspaceServerArgs) -> server::WorkspaceServer {
     use crate::layer::{IntoService as _, LayerExt as _};
     use crate::pubsub::layers::PubSubLayer;
 

@@ -1,16 +1,19 @@
 use std::{collections::HashMap, fmt, str::FromStr};
 
 use bytemuck::{Pod, Zeroable};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, id::ID, state_graph::{frame::{GraphFrame, GraphFrameId}, hitl::{HitlFrame, HitlFrameId}, orchestration::{OrchestrationFrame, OrchestrationFrameId}},
+    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, 
+    id::ID, 
+    state::State, 
+    graph::{GraphFrame, GraphFrameId}, 
 };
 
 
 
-#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
 #[repr(C)]
 pub struct SessionId(ID);
 
@@ -110,15 +113,13 @@ pub struct SessionLog {
 /// remplacent l'enregistrement entier plutôt que de fusionner un delta :
 /// c'est à l'appelant (voir [`client::SessionClient`]) de renvoyer l'état
 /// complet à jour à chaque mutation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
     pub frames: AgentFrameMap,
     pub graphs: HashMap<GraphFrameId, GraphFrame>,
-    pub orchestrations: HashMap<OrchestrationFrameId, OrchestrationFrame>,
-    pub hitls: HashMap<HitlFrameId, HitlFrame>,
     pub logs: Vec<SessionLog>,
-    pub vars: HashMap<String, Value>,
+    pub state: State,
     /// Horodatage géré par le store (voir
     /// `session::store::SessionStore::insert`), pas par l'appelant : toute
     /// valeur posée ici avant un `insert` est ignorée, écrasée par l'heure
@@ -129,6 +130,17 @@ pub struct Session {
     /// contrairement à `created_at` qu'un `replace` laisse intact.
     pub last_updated_at: chrono::DateTime<chrono::Utc>,
 }
+
+impl Session {
+    pub fn state(&self) -> &State {
+        &self.state
+    }
+
+    pub fn graph_frame(&self, id: &GraphFrameId) -> Option<&GraphFrame> {
+        self.graphs.get(id)
+    }
+}
+
 
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AgentFrameMap(HashMap<AgentId, AgentFrame>);

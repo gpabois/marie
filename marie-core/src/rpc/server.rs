@@ -8,17 +8,25 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio::{select, sync::mpsc, task::JoinHandle};
 use tracing::warn;
 
-use crate::{layer::Layer, rpc::{RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
+use crate::{di::{Factory, Get}, layer::{Layer, LayerExt}, network::{Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::{RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}};
 
-#[derive(Default)]
-pub struct RpcServerActor {
-    executors: HashMap<String, RpcExecutor>
-}
+
 
 #[derive(Clone)]
 pub struct RpcServer {
     executed: Arc<Mutex<Vec<String>>>,
-    tx: mpsc::UnboundedSender<RpcCommand>
+    tx: mpsc::UnboundedSender<Command>
+}
+
+impl<C> Factory<C> for RpcServer where C: Get<Network> {
+    fn create(container: &C) -> Self {
+        let network: Network = container.get();
+        let actor = Actor::default();
+        actor.run(network.layer()
+            .chain::<FrameLayer, _>(())
+            .chain::<RpcMuxLayer, _> (())
+        )
+    }
 }
 
 impl RpcServer {
@@ -36,7 +44,7 @@ impl RpcServer {
             Args: DeserializeOwned, 
             R: Serialize + 'static
     {
-        use RpcCommand::Register;
+        use Command::Register;
 
         let name = name.to_string();
         let exe = RpcExecutor::new(f);
@@ -45,7 +53,12 @@ impl RpcServer {
     } 
 }
 
-impl RpcServerActor {
+#[derive(Default)]
+struct Actor {
+    executors: HashMap<String, RpcExecutor>
+}
+
+impl Actor {
     /// Enregistre un RPC au nom donné
     pub fn register<F, Args, R>(&mut self, name: impl ToString, f: F) 
         where 
@@ -64,8 +77,8 @@ impl RpcServerActor {
         let (tx, rx) = layer.split();
         let mut rx = Box::pin(rx);
         let mut tx = Box::pin(tx);
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<RpcCommand>();
-        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<RpcEvent>();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
+        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Event>();
 
         let mut executors = self.executors;
         let executed = executors.iter().map(|(name, _)| name).cloned().collect();
@@ -73,7 +86,7 @@ impl RpcServerActor {
         let cmd_tx_out = cmd_tx.clone();
         tokio::spawn(async move {
             use RpcMessage::Call;
-            use RpcCommand::Execute;
+            use Command::Execute;
 
             loop {
                 select! {
@@ -87,8 +100,8 @@ impl RpcServerActor {
         });
 
         tokio::spawn(async move {
-            use RpcEvent::*;
-            use RpcCommand::*;
+            use Event::*;
+            use Command::*;
             use RpcMessage::{Ack, Reply};
 
             let mut ongoings = HashMap::<RpcCallId, RpcInfo>::default();
@@ -178,12 +191,12 @@ struct RpcInfo {
     handle: Option<JoinHandle<()>>
 }
 
-enum RpcCommand {
+enum Command {
     Execute(RpcCall),
     Register(String, RpcExecutor)
 }
 
-enum RpcEvent {
+enum Event {
     Spawned(RpcCall, JoinHandle<()>),
     Finished(RpcReply)
 }

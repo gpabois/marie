@@ -3,6 +3,7 @@ pub mod id;
 pub mod tools;
 
 pub mod model;
+pub mod worker;
 pub mod expert;
 pub mod secret;
 pub mod network;
@@ -24,9 +25,12 @@ pub mod persistency;
 mod vfs;
 pub mod graph;
 pub mod di;
+pub mod schema;
+pub mod state;
+pub mod condition;
+pub mod annuary;
+pub mod node;
 
 pub use client::Client;
 #[cfg(feature = "catalog")]
 pub use network::catalog::{start_catalog, CatalogArgs};
-#[cfg(feature = "worker")]
-pub use network::worker::{start_watchdog, start_worker, WorkerArgs};

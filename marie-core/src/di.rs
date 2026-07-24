@@ -19,7 +19,7 @@ pub struct Container(Arc<Mutex<HashMap<TypeId, Arc<dyn Any + Send + Sync>>>>);
 
 impl<T> Resolve<T> for Container 
     where 
-        T: Factory<Self> + Clone 
+        T: Factory<Self> + Clone + Send + Sync + 'static
 {
     fn resolve(&self) -> T {
         let Some(instance) = self.get() else {
@@ -32,7 +32,7 @@ impl<T> Resolve<T> for Container
     }
 }
 
-impl<T> Get<T> for Container where T: Clone {
+impl<T> Get<T> for Container where T: Clone + Send + Sync + 'static {
     fn get(&self) -> T {
         let type_id = TypeId::of::<Arc<T>>();
         self.0
@@ -45,7 +45,7 @@ impl<T> Get<T> for Container where T: Clone {
 }
 
 impl Container {
-    pub fn register<T>(&self, instance: T) {
+    pub fn register<T: Send + Sync + 'static>(&self, instance: T) {
         let type_id = TypeId::of::<T>();
         self.0.lock().insert(type_id, Arc::new(instance));
     }

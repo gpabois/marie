@@ -13,9 +13,10 @@ use std::fmt::Display;
 
 use async_trait::async_trait;
 use bytemuck::{Pod, Zeroable};
+use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentId, id::ID, job::JobId, network::worker::{JobResult, server::WorkerServer}, pubsub::PubSubMessage, session::SessionId, tools::client::ToolError};
+use crate::{agent::AgentId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, pubsub::PubSubMessage, session::SessionId, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
 
@@ -70,10 +71,13 @@ pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
     const NAME: &str;
     const DESCRIPTION: &str;
 
-    type Args: Serialize + DeserializeOwned;
+    type Args: Serialize + DeserializeOwned + JsonSchema;
     type Return: Serialize + DeserializeOwned;
 
-    fn parameters_schema() -> Value;
+    fn parameters_schema() -> Value {
+        let schema = schema_for!(Self::Args);
+        serde_json::to_value(schema).unwrap()
+    }
 
     fn definition() -> ToolDefinition {
         ToolDefinition {
@@ -83,8 +87,10 @@ pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
         }
     }
 
+    #[cfg(feature = "tool-executor")]
     async fn execute(self, cx: Cx, args: Self::Args) -> anyhow::Result<Self::Return>;
 
+    #[cfg(feature = "tool-executor")]
     fn register_executor(self, worker: &mut WorkerServer<Cx>) where Self: Clone + Send + Sync + 'static {
         let executor = move |cx, args| {
             self.clone().execute(cx, args)

@@ -87,7 +87,7 @@ impl SessionVarStore {
 #[async_trait]
 impl VarStore for SessionVarStore {
     async fn value(&self, key: &str) -> Option<Value> {
-        self.client.query_vars(self.session_id, key).await.ok()?.first().cloned()
+        self.client.query_state(self.session_id, key).await.ok()?.first().cloned()
     }
 
     async fn set_value(&self, key: &str, value: Value) -> anyhow::Result<()> {

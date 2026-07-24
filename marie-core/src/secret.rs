@@ -362,8 +362,8 @@ impl SecretManager {
     /// `peer_id`, sous l'epoch courante (voir [`Self::for_peer_epoch`] pour
     /// une epoch spécifique, nécessaire côté déchiffrement d'un
     /// `EncryptedSecret` reçu pendant une rotation).
-    pub fn for_peer(&self, peer_id: PeerId) -> SecretResult<PeerSecretManager> {
-        self.for_peer_epoch(peer_id, self.current_epoch())
+    pub fn for_peer(&self, peer_id: impl Into<PeerId>) -> SecretResult<PeerSecretManager> {
+        self.for_peer_epoch(peer_id.into(), self.current_epoch())
     }
 
     /// Comme [`Self::for_peer`], mais dérive la clé pour une epoch

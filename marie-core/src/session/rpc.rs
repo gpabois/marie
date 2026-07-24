@@ -6,7 +6,7 @@ use tokio::sync::oneshot;
 
 use crate::{
     rpc::{RemoteProcedureCall, Void}, session::{
-        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_vars}, store::{SessionStore, SessionStoreClient},
+        Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionStateQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_state}, store::{SessionStore, SessionStoreClient},
     },
     state_graph::hitl::HitlFrameId,
 };
@@ -23,6 +23,7 @@ impl RemoteProcedureCall for GetSession {
     type Args = SessionId;
     type Return = Option<Session>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, id: SessionId, _: PeerId) -> Option<Session> {
         self.0.get(id).await.ok().flatten()
     }
@@ -39,6 +40,7 @@ impl RemoteProcedureCall for ListSession {
     type Args = Void;
     type Return = Vec<Session>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, _: Void, _: PeerId) -> Vec<Session> {
         self.0.list().await.unwrap_or_default()
     }
@@ -58,6 +60,7 @@ impl RemoteProcedureCall for InsertSession {
     type Args = Session;
     type Return = Void;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, session: Session, _: PeerId) -> Void {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::Insert { session, reply });
@@ -78,6 +81,7 @@ impl RemoteProcedureCall for UpdateSession {
     type Args = Session;
     type Return = Void;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, session: Session, _: PeerId) -> Void {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::Replace { session, reply });
@@ -98,6 +102,7 @@ impl RemoteProcedureCall for RemoveSession {
     type Args = SessionId;
     type Return = Void;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, id: SessionId, _: PeerId) -> Void {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::Remove { id, reply });
@@ -122,6 +127,7 @@ impl RemoteProcedureCall for ReportAgentRun {
     type Args = SessionReportAgentRunRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportAgentRunRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportAgentRun {
@@ -152,6 +158,7 @@ impl RemoteProcedureCall for ReportToolDispatch {
     type Args = SessionReportToolDispatchRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportToolDispatchRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportToolDispatch {
@@ -178,6 +185,7 @@ impl RemoteProcedureCall for ReportToolExecution {
     type Args = SessionReportToolExecutionRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportToolExecutionRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportToolExecution {
@@ -202,6 +210,7 @@ impl RemoteProcedureCall for AppendLog {
     type Args = SessionAppendLogRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionAppendLogRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::AppendLog {
@@ -228,6 +237,7 @@ impl RemoteProcedureCall for InsertInLog {
     type Args = SessionInsertInLogRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionInsertInLogRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::InsertInLog {
@@ -245,17 +255,18 @@ impl RemoteProcedureCall for InsertInLog {
 /// par [`crate::session::server::SessionCommand`], contrairement aux RPC
 /// mutantes ci-dessus.
 #[derive(Clone)]
-pub struct QueryVars(pub(crate) SessionStoreClient);
+pub struct QueryState(pub(crate) SessionStoreClient);
 
 #[async_trait]
-impl RemoteProcedureCall for QueryVars {
+impl RemoteProcedureCall for QueryState {
     const NAME: &'static str = "/marie/sessions/vars/query";
 
-    type Args = SessionVarsQueryRequest;
+    type Args = SessionStateQueryRequest;
     type Return = Result<Vec<Value>, String>;
 
-    async fn execute(self, request: SessionVarsQueryRequest, _: PeerId) -> Result<Vec<Value>, String> {
-        query_vars(self.0, request.session_id, &request.path).await.map_err(|e| e.to_string())
+    #[cfg(feature="rpc-executor")]
+    async fn execute(self, request: SessionStateQueryRequest, _: PeerId) -> Result<Vec<Value>, String> {
+        query_state(self.0, request.location, &request.path).await.map_err(|e| e.to_string())
     }
 }
 
@@ -271,6 +282,7 @@ impl RemoteProcedureCall for PatchVars {
     type Args = SessionVarsPatchRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionVarsPatchRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::PatchVars {
@@ -295,6 +307,7 @@ impl RemoteProcedureCall for RemoveVars {
     type Args = SessionVarsRemoveRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionVarsRemoveRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::RemoveVars {
@@ -318,6 +331,7 @@ impl RemoteProcedureCall for PushGraph {
     type Args = SessionPushGraphRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionPushGraphRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::PushGraph { agent_id: request.agent_id, graph_id: request.graph_id, graph: request.graph, reply });
@@ -338,6 +352,7 @@ impl RemoteProcedureCall for UpdateGraphStep {
     type Args = SessionUpdateGraphStepRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionUpdateGraphStepRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::UpdateGraphStep { graph_id: request.graph_id, graph: request.graph, reply });
@@ -358,6 +373,7 @@ impl RemoteProcedureCall for ReportGraphDispatch {
     type Args = SessionReportGraphDispatchRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportGraphDispatchRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportGraphDispatch {
@@ -382,6 +398,7 @@ impl RemoteProcedureCall for ReportGraphRun {
     type Args = SessionReportGraphRunRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportGraphRunRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportGraphRun { graph_id: request.graph_id, response: request.response, reply });
@@ -402,6 +419,7 @@ impl RemoteProcedureCall for PushOrchestration {
     type Args = SessionPushOrchestrationRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionPushOrchestrationRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::PushOrchestration {
@@ -428,6 +446,7 @@ impl RemoteProcedureCall for PushHitl {
     type Args = SessionPushHitlRequest;
     type Return = Result<(), String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionPushHitlRequest, _: PeerId) -> Result<(), String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::PushHitl {
@@ -456,6 +475,7 @@ impl RemoteProcedureCall for ReportUserInput {
     type Args = SessionReportUserInputRequest;
     type Return = Result<HitlFrameId, String>;
 
+    #[cfg(feature="rpc-executor")]
     async fn execute(self, request: SessionReportUserInputRequest, _: PeerId) -> Result<HitlFrameId, String> {
         let (reply, rx) = oneshot::channel();
         let _ = self.0.unbounded_send(SessionCommand::ReportUserInput {

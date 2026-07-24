@@ -1,6 +1,12 @@
 use futures::{SinkExt as _, StreamExt as _, stream::BoxStream};
 
-use crate::{job::JobInstance, layer::{IntoService, Layer, LayerChain}, network::worker::{WorkerEvent, client::{WorkerClient, WorkerClientActor, WorkerClientArgs}, server::{WorkerServer, WorkerServerActor, WorkerServerArgs}, watchdog::{WorkerWatchdog, WorkerWatchdogActor, WorkerWatchdogArgs}}, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt as _}};
+use crate::{
+    layer::{Layer, LayerChain}, 
+    worker::WorkerEvent,
+    pubsub::PubSubMessage, 
+    sink::{BoxSink, SinkBoxExt as _}
+};
+
 
 pub struct WorkerEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 
@@ -12,40 +18,6 @@ impl Layer for WorkerEventLayer {
 
     fn split(self) -> (Self::Sender, Self::Receiver) {
         (self.0, self.1)
-    }
-}
-
-impl<T> IntoService<WorkerClient, WorkerClientArgs> for T 
-    where 
-        T: Layer<Send = WorkerEvent, Received = WorkerEvent>,
-{
-
-    fn into_service(self, args: WorkerClientArgs) -> WorkerClient {
-        WorkerClientActor::create(self, args)
-    }
-}
-
-
-impl<T> IntoService<WorkerWatchdog, WorkerWatchdogArgs> for T 
-    where 
-        T: Layer<Send = WorkerEvent, Received = WorkerEvent>,
-{
-
-    fn into_service(self, args: WorkerWatchdogArgs) -> WorkerWatchdog {
-        WorkerWatchdogActor::new(self, args)
-    }
-}
-
-
-impl<B, Cx, T> IntoService<WorkerServer<Cx>, WorkerServerArgs<Cx, B>> for T 
-    where 
-            T: Layer<Send = WorkerEvent, Received = WorkerEvent>,
-            B: Fn(&JobInstance) -> Cx + Send + Sync + 'static,
-            Cx: Send + 'static
-{
-
-    fn into_service(self, args: WorkerServerArgs<Cx, B>) -> WorkerServer<Cx> {
-        WorkerServerActor::new(self, args)
     }
 }
 

@@ -1,12 +1,14 @@
 use typed_builder::TypedBuilder;
 
 use crate::{
-    expert::client::ExpertClient, 
-    model::client::ModelClient, network::{actor::{Network, NetworkActor}, 
-    bootstrap::{self, client::BootstrapArgs}, create_swarm, peer::NodeKind}, 
-    rpc, secret::{KeyEpoch, SecretKey, SecretManager},
-    session::client::SessionClient,
-    state_graph::client::StateGraphClient,
+    di::{self, Container, Resolve}, 
+    expert::ExpertClient, 
+    model::ModelClient, 
+    rpc::RpcClient, 
+    secret::{KeyEpoch, SecretKey, SecretManager}, 
+    session::client::SessionClient, 
+    state_graph::client::StateGraphClient, 
+    tools::client::ToolClient, 
     workspace::client::WorkspaceClient
 };
 
@@ -19,11 +21,7 @@ pub struct ClientArgs {
 #[derive(Clone)]
 pub struct Client {
     network: Network,
-    pub sessions: SessionClient,
-    pub workspaces: WorkspaceClient,
-    pub models: ModelClient,
-    pub experts: ExpertClient,
-    pub graphs: StateGraphClient,
+    container: Container
 }
 
 impl Client {
@@ -31,49 +29,48 @@ impl Client {
         let swarm = create_swarm(NodeKind::Client)?;
         let local_peer_id = *swarm.local_peer_id();
 
-        let network = NetworkActor::create(swarm, NodeKind::Client);
+        let network = Actor::create(swarm, NodeKind::Client);
         let secret = SecretManager::with_epochs(args.epochs, args.current_epoch)?;
 
-        let rpc = rpc::build_client(&network);
-        let bootstrap = bootstrap::build_client(
+        let container = di::Container::default();
+        container.register(secret);
+        container.register(LocalPeerId(local_peer_id));
+        container.register(rpc::build_client(&network));
+        container.register(bootstrap::build_client(
             &network, 
             BootstrapArgs::builder()
                 .local_peer_id(local_peer_id)
                 .build()
-        );
-        
-        let sessions = SessionClient::new(
-            local_peer_id,
-            rpc.clone(),
-            bootstrap.clone()
-        );
+        ));
 
-        let workspaces = WorkspaceClient::new(
-            local_peer_id,
-            rpc.clone(),
-            bootstrap.clone()
-        );
+        // Fail fast at runtime if the di is not properly configured.
+        let sessions: SessionClient = container.resolve();
+        let workspaces: WorkspaceClient = container.resolve();
+        let models: ModelClient = container.resolve();
+        let experts: ExpertClient = container.resolve();
+        let tools: ToolClient = container.resolve();
 
-        let models = ModelClient::new(
-            local_peer_id,
-            rpc.clone(),
-            bootstrap.clone(),
-            secret
-        );
+        Ok(Client { network, container })
+    }
 
-        let experts = ExpertClient::new(
-            local_peer_id,
-            rpc.clone(),
-            bootstrap.clone()
-        );
+    #[inline]
+    pub fn sessions(&self) -> SessionClient {
+        self.container.resolve()
+    }
 
-        let graphs = StateGraphClient::new(
-            local_peer_id,
-            rpc.clone(),
-            bootstrap.clone()
-        );
+    #[inline]
+    pub fn workspaces(&self) -> WorkspaceClient {
+        self.container.resolve()
+    }
 
-        Ok(Client { network, sessions, workspaces, models, experts, graphs })
+    #[inline]
+    pub fn models(&self) -> ModelClient {
+        self.container.resolve()
+    }
+
+    #[inline]
+    pub fn tools(&self) -> ToolClient {
+        self.container.resolve()
     }
 
     pub async fn connect(&self) -> anyhow::Result<()> {
@@ -87,7 +84,7 @@ impl Client {
     /// gossipsub (voir [`Network::subscribe`]), par exemple depuis
     /// `marie_gateway::MarieGatewayActor::create`. `Network` est `Clone` (de
     /// simples `Sender`/`Arc` internes), ce clone est donc peu coûteux.
-    pub fn network(&self) -> Network {
+    pub fn network(&self) -> SwarmNetwork {
         self.network.clone()
     }
 }

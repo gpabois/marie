@@ -6,7 +6,7 @@ use parking_lot::Mutex;
 
 use crate::{
     job::JobId,
-    network::worker::client::WorkerClient,
+    worker::WorkerClient,
     rpc::{RemoteProcedureCall, Void},
     tools::{ToolDefinition, ToolCall, ToolCallId, ToolId, catalog::ToolCatalog, worker::ToolExecution},
 };
@@ -31,6 +31,7 @@ impl RemoteProcedureCall for GetTool {
     type Args = ToolId;
     type Return = Option<ToolDefinition>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, id: ToolId, _: PeerId) -> Option<ToolDefinition> {
         self.0.lock().get(id.borrow())
     }
@@ -47,6 +48,7 @@ impl RemoteProcedureCall for ListTool {
     type Args = Void;
     type Return = Vec<ToolDefinition>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, _: Void, _: PeerId) -> Vec<ToolDefinition> {
         self.0.lock().list()
     }
@@ -63,6 +65,7 @@ impl RemoteProcedureCall for InsertTool {
     type Args = (ToolId, ToolDefinition);
     type Return = Void;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, (id, tool): (ToolId, ToolDefinition), _: PeerId) -> Void {
         self.0.lock().insert(id, tool);
         Void
@@ -80,6 +83,7 @@ impl RemoteProcedureCall for UpdateTool {
     type Args = (ToolId, ToolDefinition);
     type Return = Void;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, (id, tool): (ToolId, ToolDefinition), _: PeerId) -> Void {
         self.0.lock().insert(id, tool);
         Void
@@ -97,6 +101,7 @@ impl RemoteProcedureCall for RemoveTool {
     type Args = ToolId;
     type Return = Void;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, id: ToolId, _: PeerId) -> Void {
         self.0.lock().remove(id.borrow());
         Void
@@ -117,6 +122,7 @@ impl RemoteProcedureCall for ExecuteTool {
     type Args = ToolCall;
     type Return = Result<(), String>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, call: ToolCall, _: PeerId) -> Result<(), String> {
         let ttl = std::time::Duration::from_mins(5);
 

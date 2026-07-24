@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     layer::{Layer, LayerChain}, 
-    network::actor::{NetworkCommand, NetworkEvent}, 
+    network::protocol::{NetworkCommand, NetworkEvent}, 
     sink::{BoxSink, SinkBoxExt as _}
 };
 

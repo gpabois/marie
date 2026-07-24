@@ -7,11 +7,10 @@ use tokio::{select, sync::mpsc};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    job::{JobInstance, JobId, JobState},
-    layer::Layer, 
-    network::{bootstrap::{BootstrapClient, client::PeerSelection}, 
-    worker::{JobResult, NS_WORKER, NS_WORKER_WATCHDOG, RPC_GET_STATE_JOB, RPC_SCHEDULE_JOB, RPC_WATCH_JOB, WorkerError, WorkerEvent}}, rpc::{RpcClient, RpcError, RpcServer, Void, client::RpcCallArgs}, sink::{BoxSink, SinkBoxExt}
+    annuary::Annuary, job::{JobId, JobInstance, JobState}, layer::Layer, network::bootstrap::{BootstrapClient, client::PeerSelection}, rpc::{RpcClient, RpcServer, Void, client::RpcCallArgs}, sink::{BoxSink, SinkBoxExt}
 };
+
+use super::{JobResult, NS_WORKER, NS_WORKER_WATCHDOG, RPC_GET_STATE_JOB, RPC_SCHEDULE_JOB, RPC_WATCH_JOB, WorkerError, WorkerEvent};
 
 type WorkEventEmitter = BoxSink<'static, WorkerEvent, anyhow::Error>;
 type JobTrackers = Arc<Mutex<HashMap<JobId, JobTrackerInfo>>>;
@@ -38,9 +37,9 @@ pub struct WorkerWatchdogArgs {
     rpc_server: RpcServer
 }
 
-pub struct WorkerWatchdogActor;
+struct Actor;
 
-impl WorkerWatchdogActor {
+impl Actor {
     pub fn new(
         layer: impl Layer<Send = WorkerEvent, Received = WorkerEvent>,
         mut args: WorkerWatchdogArgs
@@ -148,8 +147,8 @@ pub async fn watch_job(job: JobInstance, bootstrap: BootstrapClient, rpc: RpcCli
     Ok(())
 }
 
-pub async fn get_job_state(id: JobId, bootstrap: BootstrapClient, rpc: RpcClient) -> Result<Option<JobState>, WorkerError> {
-    let watchdog = bootstrap.select_peer(NS_WORKER_WATCHDOG, &id).ok_or(WorkerError::NoWatchdogFound)?;
+pub async fn get_job_state(id: JobId, annuary: Annuary, rpc: RpcClient) -> Result<Option<JobState>, WorkerError> {
+    let watchdog = annuary.select(NS_WORKER_WATCHDOG, id.as_bytes()).pop().ok_or(WorkerError::NoWatchdogFound)?;
 
     let state = RpcCallArgs::builder()
         .name(RPC_GET_STATE_JOB)

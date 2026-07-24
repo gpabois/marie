@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use futures::{FutureExt, SinkExt as _, StreamExt as _, TryFutureExt as _, channel::mpsc::{self, UnboundedSender}};
 use libp2p::rendezvous::Namespace;
 use serde_json::{Value, json};
@@ -10,8 +10,8 @@ use typed_builder::TypedBuilder;
 
 use crate::{
     agent::{AgentId, context::ContextEntry, frame::AgentFrame, role::Role, status::{AgentResponse, AgentStatus, YieldStatus}}, hitl::{Answer, Question}, layer::Layer, network::{bootstrap::BootstrapClient, worker::client::WorkerClient}, rpc::{RemoteProcedureCall, RpcServer}, session::{
-        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryVars, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, store::{SessionStore, SessionStoreClient}, worker::RunAgent,
-    }, sink::SinkBoxExt as _, tools::{ToolCallId, ToolCallResult},
+        NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryState, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, store::{SessionStore, SessionStoreClient}, worker::RunAgent,
+    }, sink::SinkBoxExt as _, state::{StateAccess, StateLocation}, tools::{ToolCallId, ToolCallResult}, worker::WorkerServer,
 };
 use crate::state_graph::{
     StateGraph,
@@ -250,7 +250,7 @@ impl SessionServerActor {
         {
             GetSession(store.clone()).register(&mut args.rpc_server);
             ListSession(store.clone()).register(&mut args.rpc_server);
-            QueryVars(store.clone()).register(&mut args.rpc_server);
+            QueryState(store.clone()).register(&mut args.rpc_server);
 
             InsertSession(cmd_tx.clone()).register(&mut args.rpc_server);
             UpdateSession(cmd_tx.clone()).register(&mut args.rpc_server);
@@ -687,6 +687,7 @@ pub struct SessionServer {
     pub(crate) cmd_tx: mpsc::UnboundedSender<SessionCommand>,
 }
 
+
 /// Récupère `session_id` dans `catalog`, ou une erreur lisible si elle n'est
 /// pas (encore) connue de ce nœud — commun aux opérations ci-dessous, qui
 /// mutent une session existante plutôt que d'en créer une (contrairement à
@@ -1036,15 +1037,27 @@ pub(crate) async fn insert_in_log(
 
 /// Évalue `path` (JSONPath) contre `Session::vars`, traité comme un unique
 /// document JSON (voir [`crate::session::SessionVarsQueryRequest`]).
-pub(crate) async fn query_vars(
-    catalog: SessionStoreClient, 
-    session_id: SessionId, 
+#[inline]
+pub(crate) async fn query_state(
+    sessions: SessionStoreClient, 
+    location: StateLocation, 
     path: &str
 ) -> Result<Vec<Value>, anyhow::Error> {
-    let session = get_session(catalog, session_id).await?;
-    let doc = serde_json::to_value(&session.vars)?;
-    let matches = jsonpath_lib::select(&doc, path)?;
-    Ok(matches.into_iter().cloned().collect())
+    match location {
+        StateLocation::InSession(session_id) => {
+            let session = get_session(sessions, session_id).await?;
+            session.state().query(path)
+        },
+        StateLocation::InGraph(graph_id) => {
+            let session_id = graph_id.session_id();
+            let session = get_session(sessions, session_id).await?;
+            let Some(graph) = session.graph_frame(&graph_id) else {
+                bail!("no graph frame found with id : {graph_id:?}");
+            };
+            graph.state().query(path)
+        },
+        StateLocation::InWorkspace(_) => bail!("cannot query workspace's state from the scope of a session"),
+    }
 }
 
 /// Remplace, dans `Session::vars` traité comme un unique document JSON,
