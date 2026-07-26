@@ -1,4 +1,4 @@
-use anyhow::anyhow;
+use crate::err;
 use json_patch::Patch;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -7,10 +7,10 @@ use serde_json::Value;
 use crate::{graph::GraphFrameId, schema::Schema, session::SessionId, workspace::WorkspaceId};
 
 pub trait StateAccess {
-    fn query(&mut self, path: &str) -> anyhow::Result<Vec<Value>>;
-    fn patch(&mut self, patch: Patch) -> anyhow::Result<()>;
+    fn query(&self, path: &str) -> crate::Result<Vec<Value>>;
+    fn patch(&mut self, patch: Patch) -> crate::Result<()>;
 
-    fn patch_from_value(&mut self, patch: Value) -> anyhow::Result<()> {
+    fn patch_from_value(&mut self, patch: Value) -> crate::Result<()> {
         let patch: Patch = serde_json::from_value(patch)?;
         self.patch(patch)
     }
@@ -31,17 +31,17 @@ pub struct State {
 }
 
 impl StateAccess for State {
-    fn query(&self, path: &str) -> anyhow::Result<Vec<Value>> {
+    fn query(&self, path: &str) -> crate::Result<Vec<Value>> {
         let query = jsonpath_rust::query::js_path_vals(path, &self.instance)?;
         Ok(query.into_iter().cloned().collect())
     }
 
-    fn patch(&mut self, patch: Patch) -> anyhow::Result<()> {
+    fn patch(&mut self, patch: Patch) -> crate::Result<()> {
         if let Some(schema) = &self.schema {
             let mut instance = self.instance.clone();
             json_patch::patch(&mut instance, &patch);
             jsonschema::validate(&schema, &instance)
-                .map_err(|err| anyhow!("state structure violation while patching : {err:?}"))?;
+                .map_err(|err| err!("state structure violation while patching : {err:?}"))?;
             self.instance = instance;
             Ok(())
         } else {
@@ -62,11 +62,11 @@ impl From<StateTransaction> for Vec<Patch> {
 }
 
 impl StateAccess for StateTransaction {
-    fn query(&mut self, path: &str) -> anyhow::Result<Vec<Value>> {
+    fn query(&self, path: &str) -> crate::Result<Vec<Value>> {
         self.instance.query(path)
     }
 
-    fn patch(&mut self, patch: Patch) -> anyhow::Result<()> {
+    fn patch(&mut self, patch: Patch) -> crate::Result<()> {
         self.instance.patch(patch.clone())?;
         self.patches.push(patch);
         Ok(())

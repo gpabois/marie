@@ -48,23 +48,23 @@ pub struct Inode {
 #[async_trait]
 pub trait InodeCatalog: Send + Sync {
     /// L'inode à `path`, ou `None` s'il n'existe pas.
-    async fn resolve(&self, path: &str) -> anyhow::Result<Option<Inode>>;
+    async fn resolve(&self, path: &str) -> crate::Result<Option<Inode>>;
 
     /// Enfants directs du dossier `path`, `(nom, inode)`. Échoue si `path`
     /// n'existe pas (contrairement à [`Self::resolve`], qui renvoie `None`) :
     /// un appelant qui liste un chemin inconnu a presque toujours une erreur
     /// à se signaler, pas un dossier vide à afficher.
-    async fn children(&self, path: &str) -> anyhow::Result<Vec<(String, Inode)>>;
+    async fn children(&self, path: &str) -> crate::Result<Vec<(String, Inode)>>;
 
     /// Crée `path` comme dossier, avec ses parents manquants (comme
     /// `mkdir -p`) — sans effet si `path` est déjà un dossier.
-    async fn mkdir(&self, path: &str) -> anyhow::Result<Inode>;
+    async fn mkdir(&self, path: &str) -> crate::Result<Inode>;
 
     /// Crée (ou remplace) `path` comme fichier, avec ses parents manquants,
     /// et lui alloue une nouvelle clé d'objet — à charge de l'appelant
     /// d'écrire le contenu à cette clé dans l'`ObjectStore` associé (voir
     /// [`ObjectFileSystem::open`]).
-    async fn create_file(&self, path: &str) -> anyhow::Result<Inode>;
+    async fn create_file(&self, path: &str) -> crate::Result<Inode>;
 
     /// Supprime `path` — récursivement s'il s'agit d'un dossier — et renvoie
     /// les clés d'objet libérées (tous les inodes `kind == File` du
@@ -72,7 +72,7 @@ pub trait InodeCatalog: Send + Sync {
     /// l'`ObjectStore` associé (voir [`ObjectFileSystem::remove`]) : le
     /// catalogue ne connaît pas l'`ObjectStore`. Sans effet (et renvoie une
     /// liste vide) si `path` n'existe pas.
-    async fn remove(&self, path: &str) -> anyhow::Result<Vec<String>>;
+    async fn remove(&self, path: &str) -> crate::Result<Vec<String>>;
 }
 
 /// [`InodeCatalog`] adossé à PostgreSQL : une table `fs_inode` unique,
@@ -94,7 +94,7 @@ impl PostgresInodeCatalog {
     /// `persistency::postgres::run_migrations` pour le schéma de la table
     /// elle-même, à appliquer une fois par l'appelant avant toute
     /// utilisation de ce catalogue).
-    pub async fn for_workspace(pool: PgPool, workspace_id: WorkspaceId) -> anyhow::Result<Self> {
+    pub async fn for_workspace(pool: PgPool, workspace_id: WorkspaceId) -> crate::Result<Self> {
         let global_root = ensure_global_root(&pool).await?;
         let root_id = ensure_path(&pool, global_root, &["workspaces", &workspace_id.to_string()]).await?;
         Ok(Self { pool, root_id, ids: IdGenerator::default() })
@@ -102,7 +102,7 @@ impl PostgresInodeCatalog {
 
     /// Racine dédiée à une session (`/workspaces/{workspace_id}/sessions/{session_id}`),
     /// imbriquée sous celle de son workspace — voir la doc de [`Self`].
-    pub async fn for_session(pool: PgPool, workspace_id: WorkspaceId, session_id: SessionId) -> anyhow::Result<Self> {
+    pub async fn for_session(pool: PgPool, workspace_id: WorkspaceId, session_id: SessionId) -> crate::Result<Self> {
         let global_root = ensure_global_root(&pool).await?;
         let root_id =
             ensure_path(&pool, global_root, &["workspaces", &workspace_id.to_string(), "sessions", &session_id.to_string()]).await?;
@@ -111,7 +111,7 @@ impl PostgresInodeCatalog {
 
     /// Id de l'inode à `path`, relatif à `self.root_id` — `None` si un
     /// segment quelconque du chemin est introuvable.
-    async fn walk(&self, path: &str) -> anyhow::Result<Option<InodeId>> {
+    async fn walk(&self, path: &str) -> crate::Result<Option<InodeId>> {
         let mut current = self.root_id;
         for segment in split_path(path) {
             let row = sqlx::query("SELECT id FROM fs_inode WHERE parent_id = $1 AND name = $2")
@@ -125,7 +125,7 @@ impl PostgresInodeCatalog {
         Ok(Some(current))
     }
 
-    async fn load(&self, id: InodeId) -> anyhow::Result<Inode> {
+    async fn load(&self, id: InodeId) -> crate::Result<Inode> {
         let row = sqlx::query("SELECT id, kind, object_key, size FROM fs_inode WHERE id = $1").bind(id.0).fetch_one(&self.pool).await?;
         Ok(row_to_inode(&row))
     }
@@ -133,10 +133,10 @@ impl PostgresInodeCatalog {
     /// Id du dossier parent de `path` (créé au besoin, avec ses propres
     /// parents manquants) et nom du dernier segment — pour [`Self::mkdir`]/
     /// [`Self::create_file`].
-    async fn resolve_parent(&self, path: &str) -> anyhow::Result<(InodeId, String)> {
+    async fn resolve_parent(&self, path: &str) -> crate::Result<(InodeId, String)> {
         let segments = split_path(path);
         let Some((leaf, parents)) = segments.split_last() else {
-            anyhow::bail!("chemin vide : la racine du scope existe déjà");
+            crate::bail!("chemin vide : la racine du scope existe déjà");
         };
 
         let mut current = self.root_id;
@@ -149,29 +149,29 @@ impl PostgresInodeCatalog {
 
 #[async_trait]
 impl InodeCatalog for PostgresInodeCatalog {
-    async fn resolve(&self, path: &str) -> anyhow::Result<Option<Inode>> {
+    async fn resolve(&self, path: &str) -> crate::Result<Option<Inode>> {
         match self.walk(path).await? {
             Some(id) => Ok(Some(self.load(id).await?)),
             None => Ok(None),
         }
     }
 
-    async fn children(&self, path: &str) -> anyhow::Result<Vec<(String, Inode)>> {
+    async fn children(&self, path: &str) -> crate::Result<Vec<(String, Inode)>> {
         let Some(id) = self.walk(path).await? else {
-            anyhow::bail!("dossier introuvable : {path}");
+            crate::bail!("dossier introuvable : {path}");
         };
 
         let rows = sqlx::query("SELECT name, id, kind, object_key, size FROM fs_inode WHERE parent_id = $1").bind(id.0).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(|row| (row.get::<String, _>("name"), row_to_inode(row))).collect())
     }
 
-    async fn mkdir(&self, path: &str) -> anyhow::Result<Inode> {
+    async fn mkdir(&self, path: &str) -> crate::Result<Inode> {
         let (parent, leaf) = self.resolve_parent(path).await?;
         let id = ensure_child_dir(&self.pool, parent, &leaf).await?;
         self.load(id).await
     }
 
-    async fn create_file(&self, path: &str) -> anyhow::Result<Inode> {
+    async fn create_file(&self, path: &str) -> crate::Result<Inode> {
         let (parent, leaf) = self.resolve_parent(path).await?;
         // Nouvelle clé à chaque (re)création plutôt que réutiliser un chemin
         // dérivé du nom : l'ancien objet, s'il y en avait un, devient
@@ -193,7 +193,7 @@ impl InodeCatalog for PostgresInodeCatalog {
         Ok(row_to_inode(&row))
     }
 
-    async fn remove(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn remove(&self, path: &str) -> crate::Result<Vec<String>> {
         let Some(id) = self.walk(path).await? else { return Ok(Vec::new()) };
 
         // Collecte les clés d'objet de tout le sous-arbre avant de le
@@ -228,7 +228,7 @@ fn row_to_inode(row: &sqlx::postgres::PgRow) -> Inode {
     Inode { id: InodeId(row.get("id")), kind, object_key: row.get("object_key"), size: row.get::<i64, _>("size") as u64 }
 }
 
-async fn ensure_global_root(pool: &PgPool) -> anyhow::Result<InodeId> {
+async fn ensure_global_root(pool: &PgPool) -> crate::Result<InodeId> {
     if let Some(row) = sqlx::query("SELECT id FROM fs_inode WHERE parent_id IS NULL").fetch_optional(pool).await? {
         return Ok(InodeId(row.get("id")));
     }
@@ -253,7 +253,7 @@ async fn ensure_global_root(pool: &PgPool) -> anyhow::Result<InodeId> {
 /// `root`, dans l'ordre — un chemin comme `workspaces/{id}/sessions/{id}`
 /// est une chaîne de lignes `fs_inode` parent -> enfant, pas un préfixe de
 /// clé plat (voir la doc de [`PostgresInodeCatalog`]).
-async fn ensure_path(pool: &PgPool, root: InodeId, segments: &[&str]) -> anyhow::Result<InodeId> {
+async fn ensure_path(pool: &PgPool, root: InodeId, segments: &[&str]) -> crate::Result<InodeId> {
     let mut current = root;
     for segment in segments {
         current = ensure_child_dir(pool, current, segment).await?;
@@ -261,7 +261,7 @@ async fn ensure_path(pool: &PgPool, root: InodeId, segments: &[&str]) -> anyhow:
     Ok(current)
 }
 
-async fn ensure_child_dir(pool: &PgPool, parent: InodeId, name: &str) -> anyhow::Result<InodeId> {
+async fn ensure_child_dir(pool: &PgPool, parent: InodeId, name: &str) -> crate::Result<InodeId> {
     let inserted = sqlx::query("INSERT INTO fs_inode (parent_id, name, kind) VALUES ($1, $2, 0) ON CONFLICT (parent_id, name) DO NOTHING RETURNING id")
         .bind(parent.0)
         .bind(name)
@@ -294,23 +294,23 @@ impl ObjectFileSystem {
 
 #[async_trait]
 impl FileSystem for ObjectFileSystem {
-    async fn mkdir(&self, path: &str) -> anyhow::Result<()> {
+    async fn mkdir(&self, path: &str) -> crate::Result<()> {
         self.catalog.mkdir(path).await?;
         Ok(())
     }
 
-    async fn ls(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn ls(&self, path: &str) -> crate::Result<Vec<String>> {
         Ok(self.catalog.children(path).await?.into_iter().map(|(name, _)| name).collect())
     }
 
-    async fn open(&self, path: &str, options: OpenOptions) -> anyhow::Result<BoxedDescriptor> {
+    async fn open(&self, path: &str, options: OpenOptions) -> crate::Result<BoxedDescriptor> {
         let existing = self.catalog.resolve(path).await?;
 
         let inode = match existing {
             Some(inode) if matches!(inode.kind, InodeKind::File) => inode,
-            Some(_) => anyhow::bail!("{path} est un dossier"),
+            Some(_) => crate::bail!("{path} est un dossier"),
             None if options.create || options.create_new => self.catalog.create_file(path).await?,
-            None => anyhow::bail!("fichier introuvable : {path}"),
+            None => crate::bail!("fichier introuvable : {path}"),
         };
 
         let object_key = ObjectPath::from(inode.object_key.expect("un inode de kind File porte toujours un object_key"));
@@ -329,7 +329,7 @@ impl FileSystem for ObjectFileSystem {
         }
     }
 
-    async fn remove(&self, path: &str) -> anyhow::Result<()> {
+    async fn remove(&self, path: &str) -> crate::Result<()> {
         let object_keys = self.catalog.remove(path).await?;
         for object_key in object_keys {
             self.store.delete(&ObjectPath::from(object_key)).await?;

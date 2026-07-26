@@ -1,7 +1,7 @@
 use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 use typed_builder::TypedBuilder;
-use crate::agent::AgentId;
+use crate::agent::AgentFrameId;
 use crate::id::ID;
 
 use crate::agent::{context::Context, status::AgentStatus};
@@ -10,10 +10,10 @@ use crate::tools::ToolId;
 
 #[derive(TypedBuilder)]
 pub struct AgentFrameArgs {
-    pub id: AgentId,
+    pub id: AgentFrameId,
     pub model: ModelId,
     #[builder(default, setter(strip_option))]
-    pub parent: Option<AgentId>,
+    pub parent: Option<AgentFrameId>,
     pub context: Context,
     #[builder(default)]
     pub allowed_tools: Vec<ToolId>,
@@ -24,11 +24,11 @@ pub struct AgentFrameArgs {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AgentFrame {
     /// Agent id
-    pub id: AgentId,
+    pub id: AgentFrameId,
     /// Model of the agent
     pub model: ModelId,
     /// Agent spawner
-    pub parent: Option<AgentId>,
+    pub parent: Option<AgentFrameId>,
     /// Current status of the agent
     pub status: AgentStatus,
     /// Allowed tools 

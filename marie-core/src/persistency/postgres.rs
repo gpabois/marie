@@ -1,4 +1,4 @@
-use anyhow::Context as _;
+use crate::error::Context as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 /// Applique les migrations SQL versionnées embarquées à la compilation
@@ -37,7 +37,7 @@ pub struct PostgresStore {
 
 impl PostgresStore {
     /// Ouvre un pool de connexions vers `database_url`.
-    pub async fn connect(database_url: &str) -> anyhow::Result<Self> {
+    pub async fn connect(database_url: &str) -> crate::Result<Self> {
         let pool = PgPoolOptions::new().connect(database_url).await.context("connexion au pool PostgreSQL")?;
         Ok(Self::from_pool(pool))
     }

@@ -5,7 +5,7 @@ use thiserror::Error;
 use std::collections::HashMap;
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame, status::AgentResponse}, di::{Factory, Get, Resolve}, hitl::{Answer, Question}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, session::{
+    agent::{AgentFrameId, frame::AgentFrame, status::AgentResponse}, di::{Factory, Get, Resolve}, hitl::{Answer, Question}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void}, session::{
         NS_SESSION, Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionLogId, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionStateQueryRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionVarsRemoveRequest, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryState, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession},
     }, state::StateLocation, state_graph::{
         StateGraph,
@@ -106,7 +106,7 @@ impl SessionClient {
     /// [`crate::session::server::SessionServer`], qui met à jour le frame
     /// concerné (statut, contexte, sortie d'erreur) en conséquence. Appelée
     /// en direct par `RunAgent` en toute fin de `Job`, pas via un évènement.
-    pub async fn report_agent_run(&self, agent_id: AgentId, response: AgentResponse) -> Result<(), SessionError> {
+    pub async fn report_agent_run(&self, agent_id: AgentFrameId, response: AgentResponse) -> Result<(), SessionError> {
         let catalog = self.select_catalog(agent_id.session_id())?;
         let request = SessionReportAgentRunRequest { agent_id, response };
 
@@ -117,7 +117,7 @@ impl SessionClient {
     /// frame de `agent_id` — voir [`crate::session::server::report_tool_dispatch`].
     /// Appelée par `session::worker::run_turns` *avant* de déclencher les
     /// jobs `ToolExecution` correspondants.
-    pub async fn report_tool_dispatch(&self, agent_id: AgentId, tools_calls: Vec<ToolCallId>) -> Result<(), SessionError> {
+    pub async fn report_tool_dispatch(&self, agent_id: AgentFrameId, tools_calls: Vec<ToolCallId>) -> Result<(), SessionError> {
         let catalog = self.select_catalog(agent_id.session_id())?;
         let request = SessionReportToolDispatchRequest { agent_id, tools_calls };
 
@@ -129,7 +129,7 @@ impl SessionClient {
     /// qui l'injecte dans le contexte du frame appelant une fois tous les
     /// tools attendus répondus. Appelée en direct par
     /// `tools::worker::ToolExecution` en toute fin de `Job`.
-    pub async fn report_tool_execution(&self, agent_id: AgentId, tool_call_id: ToolCallId, result: ToolCallResult) -> Result<(), SessionError> {
+    pub async fn report_tool_execution(&self, agent_id: AgentFrameId, tool_call_id: ToolCallId, result: ToolCallResult) -> Result<(), SessionError> {
         let catalog = self.select_catalog(agent_id.session_id())?;
         let request = SessionReportToolExecutionRequest { agent_id, tool_call_id, result };
 
@@ -185,7 +185,7 @@ impl SessionClient {
     /// Pousse un nouveau [`GraphFrame`] et fait passer `agent_id` en
     /// [`crate::agent::status::YieldStatus::WaitingGraph`] — voir
     /// [`crate::session::server::push_graph`].
-    pub async fn push_graph(&self, agent_id: AgentId, graph_id: GraphFrameId, graph: StateGraph) -> Result<(), SessionError> {
+    pub async fn push_graph(&self, agent_id: AgentFrameId, graph_id: GraphFrameId, graph: StateGraph) -> Result<(), SessionError> {
         let catalog = self.select_catalog(agent_id.session_id())?;
         let request = SessionPushGraphRequest { agent_id, graph_id, graph };
 

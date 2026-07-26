@@ -1,90 +1,47 @@
 use async_trait::async_trait;
 use futures::channel::mpsc;
 use libp2p::PeerId;
+use marie_macros::core_rpc;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+#[cfg(feature="rpc-executor")]
+use crate::workspace::server::WorkspaceServer;
 use crate::{
     rpc::{RemoteProcedureCall, Void}, workspace::{
-        Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest, WorkspaceVarsRemoveRequest, server::{WorkspaceCommand, query_vars}, store::{WorkspaceStore, WorkspaceStoreClient},
+        Workspace, WorkspaceId, WorkspaceSessionRequest, WorkspaceVarsPatchRequest, WorkspaceVarsQueryRequest, WorkspaceVarsRemoveRequest, server::{WorkspaceCommand, query_vars}, store::{WorkspaceStorable, WorkspaceStoreClient},
     },
 };
 
-/// Récupère un workspace du catalogue, ou `None` si inconnu de ce nœud —
-/// voir [`crate::workspace::client::WorkspaceClient::get`].
-#[derive(Clone)]
-pub struct GetWorkspace(pub(crate) WorkspaceStoreClient);
 
-#[async_trait]
-impl RemoteProcedureCall for GetWorkspace {
-    const NAME: &'static str = "/marie/workspaces/get";
-
-    type Args = WorkspaceId;
-    type Return = Option<Workspace>;
-
-    async fn execute(self, id: WorkspaceId, _: PeerId) -> Option<Workspace> {
-        self.0.get(id).await.ok().flatten()
+core_rpc! {
+    #[rpc(name="/marie/workspaces/get")]
+    pub async fn get_workspace(self: Self<WorkspaceServer>, id: WorkspaceId) -> crate::Result<Option<Workspace>> {
+        self.0.get(id).await
     }
 }
 
-/// Liste tout le catalogue de workspaces connu de ce nœud.
-#[derive(Clone)]
-pub struct ListWorkspace(pub(crate) WorkspaceStoreClient);
-
-#[async_trait]
-impl RemoteProcedureCall for ListWorkspace {
-    const NAME: &'static str = "/marie/workspaces/list";
-
-    type Args = Void;
-    type Return = Vec<Workspace>;
-
-    async fn execute(self, _: Void, _: PeerId) -> Vec<Workspace> {
-        self.0.list().await.unwrap_or_default()
+core_rpc! {
+    #[rpc(name="/marie/workspaces/list")]
+    pub async fn list_workspace(self: Self<WorkspaceServer>, _: Void) -> crate::Result<Vec<Workspace>> {
+        self.0.list().await
     }
 }
 
-/// Crée un workspace dans le catalogue — envoie une
-/// [`WorkspaceCommand::Insert`] à
-/// [`crate::workspace::server::WorkspaceServerActor`] plutôt que de muter le
-/// store directement, pour que l'insertion émette
-/// [`crate::workspace::WorkspaceEvent::Created`].
-#[derive(Clone)]
-pub struct InsertWorkspace(pub(crate) mpsc::UnboundedSender<WorkspaceCommand>);
-
-#[async_trait]
-impl RemoteProcedureCall for InsertWorkspace {
-    const NAME: &'static str = "/marie/workspaces/insert";
-
-    type Args = Workspace;
-    type Return = Void;
-
-    async fn execute(self, workspace: Workspace, _: PeerId) -> Void {
-        let (reply, rx) = oneshot::channel();
-        let _ = self.0.unbounded_send(WorkspaceCommand::Insert { workspace, reply });
-        let _ = rx.await;
-        Void
-    }
+core_rpc! {
+    #[rpc(name="/marie/workspaces/create")]
+    pub async fn create_workspace(self: Self<WorkspaceServer>, value: Workspace) -> crate::Result<()> {
+        self.0.create(value).await
+    } 
 }
 
-/// Retire un workspace du catalogue — voir [`InsertWorkspace`] pour la
-/// raison du passage par une commande.
-#[derive(Clone)]
-pub struct RemoveWorkspace(pub(crate) mpsc::UnboundedSender<WorkspaceCommand>);
-
-#[async_trait]
-impl RemoteProcedureCall for RemoveWorkspace {
-    const NAME: &'static str = "/marie/workspaces/remove";
-
-    type Args = WorkspaceId;
-    type Return = Void;
-
-    async fn execute(self, id: WorkspaceId, _: PeerId) -> Void {
-        let (reply, rx) = oneshot::channel();
-        let _ = self.0.unbounded_send(WorkspaceCommand::Remove { id, reply });
-        let _ = rx.await;
-        Void
-    }
+core_rpc! {
+    #[rpc(name="/marie/workspaces/delete")]
+    pub async fn delete_workspace(self: Self<WorkspaceServer>, id: WorkspaceId) -> crate::Result<()> {
+        self.0.delete(id).await
+    } 
 }
+
 
 /// Rattache une session à un workspace *existant* — voir
 /// [`WorkspaceSessionRequest`] et [`crate::workspace::server::add_session`]

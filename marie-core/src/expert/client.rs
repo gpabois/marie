@@ -1,19 +1,15 @@
 use libp2p::PeerId;
-use thiserror::Error;
 
 use crate::{
-    di::{Factory, Get}, expert::{Expert, GetExpert, InsertExpert, ListExpert, NS_EXPERT, RemoveExpert, UpdateExpert, catalog::ExpertId}, network::{LocalPeerId, bootstrap::BootstrapClient}, rpc::{RpcClient, RpcError, Void},
+    Result, 
+    di::{Factory, Get}, 
+    err, 
+    expert::{Expert, ExpertId, NS_EXPERT}, 
+    network::{LocalPeerId, bootstrap::BootstrapClient}, 
+    rpc::{RpcClient, Void},
 };
 
-#[derive(Debug, Error)]
-pub enum ExpertError {
-    #[error("aucun catalogue d'experts n'est disponible")]
-    NoCatalogAvailable,
-    #[error("expert inconnu : {0}")]
-    UnknownExpert(ExpertId),
-    #[error("[Expert] échec de l'appel distant : {0}")]
-    RpcError(#[from] RpcError),
-}
+use super::rpc::*;
 
 /// Point d'entrée pour le CRUD du catalogue d'experts, sur le même modèle que
 /// [`crate::model::client::ModelClient`] : chaque opération sélectionne de
@@ -40,25 +36,24 @@ impl<D> Factory<D> for ExpertClient
 
 impl ExpertClient {
     /// Récupère la déclaration d'un expert auprès du control plane.
-    pub async fn get(&self, id: impl Into<ExpertId>) -> Result<Expert, ExpertError> {
+    pub async fn get(&self, id: impl Into<ExpertId>) -> Result<Option<Expert>> {
         let id = id.into();
         let catalog = self.select_catalog(&id)?;
 
         self.rpc
             .invoke::<GetExpert>(id.clone(), [catalog])
             .await?
-            .ok_or_else(|| ExpertError::UnknownExpert(id))
     }
 
     /// Liste tout le catalogue d'experts connu du control plane.
-    pub async fn list(&self) -> Result<Vec<Expert>, ExpertError> {
+    pub async fn list(&self) -> Result<Vec<Expert>> {
         let catalog = self.select_catalog(self.local_peer_id.to_bytes())?;
 
-        self.rpc.invoke::<ListExpert>(Void, [catalog]).await.map_err(ExpertError::from)
+        self.rpc.invoke::<ListExpert>(Void, [catalog]).await?
     }
 
     /// Crée un expert dans le catalogue.
-    pub async fn insert(&self, expert: Expert) -> Result<(), ExpertError> {
+    pub async fn insert(&self, expert: Expert) -> Result<()> {
         let catalog = self.select_catalog(&expert.id)?;
 
         self.rpc.invoke::<InsertExpert>(expert, [catalog]).await?;
@@ -67,27 +62,26 @@ impl ExpertClient {
     }
 
     /// Met à jour la déclaration d'un expert existant.
-    pub async fn update(&self, expert: Expert) -> Result<(), ExpertError> {
+    pub async fn replace(&self, expert: Expert) -> Result<()> {
         let catalog = self.select_catalog(&expert.id)?;
 
-        self.rpc.invoke::<UpdateExpert>(expert, [catalog]).await?;
+        self.rpc.invoke::<ReplaceExpert>(expert, [catalog]).await?;
 
         Ok(())
     }
 
     /// Retire un expert du catalogue.
-    pub async fn remove(&self, id: impl Into<ExpertId>) -> Result<(), ExpertError> {
+    pub async fn delete(&self, id: impl Into<ExpertId>) -> Result<()> {
         let id = id.into();
         let catalog = self.select_catalog(&id)?;
 
-        self.rpc.invoke::<RemoveExpert>(id, [catalog]).await?;
+        self.rpc.invoke::<DeleteExpert>(id, [catalog]).await?;
 
         Ok(())
     }
 
     /// Sélection déterministe d'un catalogue.
-    fn select_catalog(&self, id: impl AsRef<[u8]>) -> Result<PeerId, ExpertError> {
-        use ExpertError::NoCatalogAvailable;
-        self.bootstrap.select_peer(NS_EXPERT, &id).ok_or(NoCatalogAvailable)
+    fn select_catalog(&self, id: impl AsRef<[u8]>) -> Result<PeerId> {
+        self.bootstrap.select_peer(NS_EXPERT, &id).ok_or(err!("no experts node found"))
     }
 }

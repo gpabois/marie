@@ -48,12 +48,12 @@ pub type BoxedDescriptor = Pin<Box<dyn AsyncFile>>;
 /// `persistency::inode::ObjectFileSystem`).
 #[async_trait]
 pub trait FileSystem: Send + Sync {
-    async fn mkdir(&self, path: &str) -> anyhow::Result<()>;
-    async fn ls(&self, path: &str) -> anyhow::Result<Vec<String>>;
-    async fn open(&self, path: &str, options: OpenOptions) -> anyhow::Result<BoxedDescriptor>;
+    async fn mkdir(&self, path: &str) -> crate::Result<()>;
+    async fn ls(&self, path: &str) -> crate::Result<Vec<String>>;
+    async fn open(&self, path: &str, options: OpenOptions) -> crate::Result<BoxedDescriptor>;
     /// Supprime `path` — récursivement s'il s'agit d'un dossier. Sans effet
     /// s'il n'existe pas.
-    async fn remove(&self, path: &str) -> anyhow::Result<()>;
+    async fn remove(&self, path: &str) -> crate::Result<()>;
 }
 
 /// Nombre maximal de réécritures suivies lors de la résolution d'un alias
@@ -105,16 +105,16 @@ impl VFS {
 
     /// Enregistre un alias `from -> to` — sans effet possible si ce VFS n'a
     /// pas de table d'alias (voir [`Self::with_aliases`]).
-    pub async fn alias(&self, from: &str, to: &str) -> anyhow::Result<()> {
+    pub async fn alias(&self, from: &str, to: &str) -> crate::Result<()> {
         let Some(aliases) = &self.aliases else {
-            anyhow::bail!("ce VFS n'a pas de table d'alias");
+            crate::bail!("ce VFS n'a pas de table d'alias");
         };
         aliases.set(from, to).await
     }
 
     /// Réécrit `path` en suivant les alias enregistrés (voir la doc de
     /// [`Self`]), jusqu'à [`MAX_ALIAS_HOPS`] réécritures.
-    async fn resolve_aliases(&self, path: &str) -> anyhow::Result<String> {
+    async fn resolve_aliases(&self, path: &str) -> crate::Result<String> {
         let mut current = path.to_string();
         if let Some(aliases) = &self.aliases {
             for _ in 0..MAX_ALIAS_HOPS {
@@ -141,30 +141,30 @@ impl VFS {
         None
     }
 
-    async fn resolve(&self, path: &str) -> anyhow::Result<(Arc<dyn FileSystem>, String)> {
+    async fn resolve(&self, path: &str) -> crate::Result<(Arc<dyn FileSystem>, String)> {
         let path = self.resolve_aliases(path).await?;
-        self.resolve_mount(&path).await.ok_or_else(|| anyhow::anyhow!("aucun montage ne couvre {path}"))
+        self.resolve_mount(&path).await.ok_or_else(|| crate::err!("aucun montage ne couvre {path}"))
     }
 }
 
 #[async_trait]
 impl FileSystem for VFS {
-    async fn mkdir(&self, path: &str) -> anyhow::Result<()> {
+    async fn mkdir(&self, path: &str) -> crate::Result<()> {
         let (fs, sub) = self.resolve(path).await?;
         fs.mkdir(&sub).await
     }
 
-    async fn ls(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn ls(&self, path: &str) -> crate::Result<Vec<String>> {
         let (fs, sub) = self.resolve(path).await?;
         fs.ls(&sub).await
     }
 
-    async fn open(&self, path: &str, options: OpenOptions) -> anyhow::Result<BoxedDescriptor> {
+    async fn open(&self, path: &str, options: OpenOptions) -> crate::Result<BoxedDescriptor> {
         let (fs, sub) = self.resolve(path).await?;
         fs.open(&sub, options).await
     }
 
-    async fn remove(&self, path: &str) -> anyhow::Result<()> {
+    async fn remove(&self, path: &str) -> crate::Result<()> {
         let (fs, sub) = self.resolve(path).await?;
         fs.remove(&sub).await
     }
@@ -187,21 +187,21 @@ use super::*;
 
     #[async_trait]
     impl FileSystem for RecordingFileSystem {
-        async fn mkdir(&self, _path: &str) -> anyhow::Result<()> {
+        async fn mkdir(&self, _path: &str) -> crate::Result<()> {
             Ok(())
         }
 
-        async fn ls(&self, path: &str) -> anyhow::Result<Vec<String>> {
+        async fn ls(&self, path: &str) -> crate::Result<Vec<String>> {
             self.received.lock().await.push(path.to_string());
             Ok(vec![self.name.to_string()])
         }
 
-        async fn open(&self, _path: &str, _options: OpenOptions) -> anyhow::Result<BoxedDescriptor> {
-            anyhow::bail!("non utilisé dans ces tests")
+        async fn open(&self, _path: &str, _options: OpenOptions) -> crate::Result<BoxedDescriptor> {
+            crate::bail!("non utilisé dans ces tests")
         }
 
-        async fn remove(&self, _path: &str) -> anyhow::Result<()> {
-            anyhow::bail!("non utilisé dans ces tests")
+        async fn remove(&self, _path: &str) -> crate::Result<()> {
+            crate::bail!("non utilisé dans ces tests")
         }
     }
 
@@ -241,24 +241,24 @@ use super::*;
 
     #[async_trait]
     impl AliasCatalog for MemoryAliasCatalog {
-        async fn resolve_prefix(&self, path: &str) -> anyhow::Result<Option<String>> {
+        async fn resolve_prefix(&self, path: &str) -> crate::Result<Option<String>> {
             let aliases = self.0.lock().await;
             let best =
                 aliases.iter().filter(|(from, _)| path == from.as_str() || path.starts_with(&format!("{from}/"))).max_by_key(|(from, _)| from.len());
             Ok(best.map(|(from, to)| format!("{to}{}", &path[from.len()..])))
         }
 
-        async fn set(&self, from: &str, to: &str) -> anyhow::Result<()> {
+        async fn set(&self, from: &str, to: &str) -> crate::Result<()> {
             self.0.lock().await.push((from.to_string(), to.to_string()));
             Ok(())
         }
 
-        async fn remove(&self, from: &str) -> anyhow::Result<()> {
+        async fn remove(&self, from: &str) -> crate::Result<()> {
             self.0.lock().await.retain(|(f, _)| f != from);
             Ok(())
         }
 
-        async fn list(&self) -> anyhow::Result<Vec<(String, String)>> {
+        async fn list(&self) -> crate::Result<Vec<(String, String)>> {
             Ok(self.0.lock().await.clone())
         }
     }

@@ -1,7 +1,7 @@
 /* 
 use std::sync::Arc;
 
-use anyhow::bail;
+use crate::bail;
 use futures::StreamExt as _;
 use libp2p::PeerId;
 use object_store::ObjectStore;
@@ -55,7 +55,7 @@ pub async fn start_persistency(
     object_store: Arc<dyn ObjectStore>,
     mut shutdown: watch::Receiver<bool>,
     ready: oneshot::Sender<NetworkService>,
-) -> Result<(), anyhow::Error> {
+) -> Result<(), crate::Error> {
     use NodeKind::Persistency;
 
     let swarm = start_swarm(Persistency, |_| {}).await?;
@@ -150,11 +150,11 @@ async fn execute_rpc(
     workspace_store: &Arc<dyn WorkspaceStore>,
     workspace_vfs: &WorkspaceVfs,
     client: &NetworkService,
-) -> Result<serde_json::Value, anyhow::Error> {
+) -> Result<serde_json::Value, crate::Error> {
     match call.name.as_str() {
         RpcCall::FETCH_SESSION => {
             let request: SessionFetchRequest = serde_json::from_value(call.args)?;
-            let remote_sv = StateVector::decode_v1(&request.state_vector).map_err(|error| anyhow::anyhow!(error))?;
+            let remote_sv = StateVector::decode_v1(&request.state_vector).map_err(|error| crate::Error::msg(error.to_string()))?;
 
             let Some(diff) = store.diff_since(request.session_id, &remote_sv).await? else {
                 bail!("session {} inconnue de ce nœud de persistance", request.session_id);
@@ -167,7 +167,7 @@ async fn execute_rpc(
         // (voir `persistency::WorkspaceStore`).
         RpcCall::FETCH_WORKSPACE => {
             let request: WorkspaceFetchRequest = serde_json::from_value(call.args)?;
-            let remote_sv = StateVector::decode_v1(&request.state_vector).map_err(|error| anyhow::anyhow!(error))?;
+            let remote_sv = StateVector::decode_v1(&request.state_vector).map_err(|error| crate::Error::msg(error.to_string()))?;
 
             let Some(diff) = workspace_store.diff_since(request.workspace_id, &remote_sv).await? else {
                 bail!("workspace {} inconnu de ce nœud de persistance", request.workspace_id);
@@ -203,7 +203,7 @@ async fn execute_rpc(
 /// concurrentes dans `YrsSession::from_diff`) : on récupère alors l'état
 /// complet auprès de `source`, le pair qui vient de gossiper ce diff et qui
 /// le détient donc forcément.
-async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
+async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> crate::Result<()> {
     let message: SessionSyncMessage = serde_json::from_slice(data)?;
 
     let mut session = match store.get(&message.session_id).await? {
@@ -224,7 +224,7 @@ async fn ingest_session_diff(store: &Arc<dyn SessionStore>, client: &NetworkServ
 /// durable — même principe que [`ingest_session_diff`] (voir sa doc pour la
 /// justification de la reconstruction complète depuis `source` en cas de
 /// premier diff pour ce workspace).
-async fn ingest_workspace_diff(store: &Arc<dyn WorkspaceStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> anyhow::Result<()> {
+async fn ingest_workspace_diff(store: &Arc<dyn WorkspaceStore>, client: &NetworkService, source: PeerId, data: &[u8]) -> crate::Result<()> {
     let message: WorkspaceSyncMessage = serde_json::from_slice(data)?;
 
     let mut workspace = match store.get(&message.workspace_id).await? {

@@ -83,7 +83,7 @@ const KIND_OPENAI_COMPATIBLE: &str = "openai_compatible";
 /// Reconstitue un [`StoredModel`] depuis une ligne de la table `model` (voir
 /// `migrations/0002_model.sql`) — symétrique de l'insertion dans
 /// [`PgStore::insert`]/[`PgStore::replace`].
-fn decode_row(row: &PgRow) -> anyhow::Result<StoredModel> {
+fn decode_row(row: &PgRow) -> crate::Result<StoredModel> {
     let kind: String = row.try_get("kind")?;
     let id: String = row.try_get("id")?;
 
@@ -101,7 +101,7 @@ fn decode_row(row: &PgRow) -> anyhow::Result<StoredModel> {
             model: row.try_get("model_name")?,
             system_prompt: row.try_get("system_prompt")?,
         },
-        other => anyhow::bail!("discriminant de modèle inconnu en base : {other}"),
+        other => crate::bail!("discriminant de modèle inconnu en base : {other}"),
     };
 
     Ok(StoredModel { id: ModelId::new(id), declaration })
@@ -113,17 +113,17 @@ fn decode_row(row: &PgRow) -> anyhow::Result<StoredModel> {
 /// `&self`, et du découpage `insert`/`replace`).
 #[async_trait]
 pub trait ModelStore: Send + Sync + Clone {
-    async fn get(self, id: ModelId) -> anyhow::Result<Option<StoredModel>>;
-    async fn insert(self, value: StoredModel) -> anyhow::Result<()>;
-    async fn replace(self, value: StoredModel) -> anyhow::Result<()>;
-    async fn delete(self, id: ModelId) -> anyhow::Result<()>;
+    async fn get(self, id: ModelId) -> crate::Result<Option<StoredModel>>;
+    async fn insert(self, value: StoredModel) -> crate::Result<()>;
+    async fn replace(self, value: StoredModel) -> crate::Result<()>;
+    async fn delete(self, id: ModelId) -> crate::Result<()>;
     /// Toutes les entrées actuellement stockées.
-    async fn list(self) -> anyhow::Result<Vec<StoredModel>>;
+    async fn list(self) -> crate::Result<Vec<StoredModel>>;
 }
 
 #[async_trait]
 impl ModelStore for PgStore {
-    async fn get(self, id: ModelId) -> anyhow::Result<Option<StoredModel>> {
+    async fn get(self, id: ModelId) -> crate::Result<Option<StoredModel>> {
         let id = id.to_string();
         let row = sqlx::query(
             "SELECT id, kind, base_url, client_id, api_key_ciphertext, api_key_nonce, api_key_algorithm, api_key_epoch, model_name, system_prompt \
@@ -135,7 +135,7 @@ impl ModelStore for PgStore {
         row.as_ref().map(decode_row).transpose()
     }
 
-    async fn insert(self, value: StoredModel) -> anyhow::Result<()> {
+    async fn insert(self, value: StoredModel) -> crate::Result<()> {
         let id = value.id.to_string();
         let EncryptedModel::OpenAICompatible { base_url, client_id, api_key, model, system_prompt, .. } = &value.declaration;
 
@@ -158,7 +158,7 @@ impl ModelStore for PgStore {
         Ok(())
     }
 
-    async fn replace(self, value: StoredModel) -> anyhow::Result<()> {
+    async fn replace(self, value: StoredModel) -> crate::Result<()> {
         let id = value.id.to_string();
         let EncryptedModel::OpenAICompatible { base_url, client_id, api_key, model, system_prompt, .. } = &value.declaration;
 
@@ -183,13 +183,13 @@ impl ModelStore for PgStore {
         Ok(())
     }
 
-    async fn delete(self, id: ModelId) -> anyhow::Result<()> {
+    async fn delete(self, id: ModelId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM model WHERE id = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
     }
 
-    async fn list(self) -> anyhow::Result<Vec<StoredModel>> {
+    async fn list(self) -> crate::Result<Vec<StoredModel>> {
         let rows = sqlx::query(
             "SELECT id, kind, base_url, client_id, api_key_ciphertext, api_key_nonce, api_key_algorithm, api_key_epoch, model_name, system_prompt FROM model",
         )
@@ -203,11 +203,11 @@ impl ModelStore for PgStore {
 /// [`crate::session::store`] (`Command`) pour la raison de cette indirection
 /// par acteur plutôt qu'un accès direct au store depuis chaque appelant.
 enum Command {
-    Get(ModelId, oneshot::Sender<anyhow::Result<Option<StoredModel>>>),
-    List(oneshot::Sender<anyhow::Result<Vec<StoredModel>>>),
-    Insert(StoredModel, oneshot::Sender<anyhow::Result<()>>),
-    Replace(StoredModel, oneshot::Sender<anyhow::Result<()>>),
-    Delete(ModelId, oneshot::Sender<anyhow::Result<()>>),
+    Get(ModelId, oneshot::Sender<crate::Result<Option<StoredModel>>>),
+    List(oneshot::Sender<crate::Result<Vec<StoredModel>>>),
+    Insert(StoredModel, oneshot::Sender<crate::Result<()>>),
+    Replace(StoredModel, oneshot::Sender<crate::Result<()>>),
+    Delete(ModelId, oneshot::Sender<crate::Result<()>>),
     Shutdown,
 }
 
@@ -267,31 +267,31 @@ pub struct ModelStoreClient(mpsc::UnboundedSender<Command>, Arc<Handler>);
 
 #[async_trait]
 impl ModelStore for ModelStoreClient {
-    async fn get(self, id: ModelId) -> anyhow::Result<Option<StoredModel>> {
+    async fn get(self, id: ModelId) -> crate::Result<Option<StoredModel>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Get(id, tx))?;
         rx.await?
     }
 
-    async fn insert(self, value: StoredModel) -> anyhow::Result<()> {
+    async fn insert(self, value: StoredModel) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Insert(value, tx))?;
         rx.await?
     }
 
-    async fn replace(self, value: StoredModel) -> anyhow::Result<()> {
+    async fn replace(self, value: StoredModel) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Replace(value, tx))?;
         rx.await?
     }
 
-    async fn delete(self, id: ModelId) -> anyhow::Result<()> {
+    async fn delete(self, id: ModelId) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Delete(id, tx))?;
         rx.await?
     }
 
-    async fn list(self) -> anyhow::Result<Vec<StoredModel>> {
+    async fn list(self) -> crate::Result<Vec<StoredModel>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::List(tx))?;
         rx.await?

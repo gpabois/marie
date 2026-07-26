@@ -3,7 +3,7 @@ use futures::{SinkExt as _, StreamExt as _, stream::BoxStream};
 use crate::{
     layer::{Layer, LayerChain}, 
     worker::WorkerEvent,
-    pubsub::PubSubMessage, 
+    events::EventEnvelope, 
     sink::{BoxSink, SinkBoxExt as _}
 };
 
@@ -13,7 +13,7 @@ pub struct WorkerEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 impl Layer for WorkerEventLayer {
     type Send = WorkerEvent;
     type Received = WorkerEvent;
-    type Sender = BoxSink<'static, Self::Send, anyhow::Error>;
+    type Sender = BoxSink<'static, Self::Send, crate::Error>;
     type Receiver = BoxStream<'static, Self::Received>;
 
     fn split(self) -> (Self::Sender, Self::Receiver) {
@@ -21,13 +21,13 @@ impl Layer for WorkerEventLayer {
     }
 }
 
-impl<L> LayerChain<L, ()> for WorkerEventLayer where L: Layer<Send=PubSubMessage, Received=PubSubMessage> {
+impl<L> LayerChain<L, ()> for WorkerEventLayer where L: Layer<Send=EventEnvelope, Received=EventEnvelope> {
     
     fn chain(layer: L, _: ()) -> Self {
         let (tx, rx) = layer.split();
 
         let tx = tx.with(|event: WorkerEvent| {
-            std::future::ready(Ok(PubSubMessage {
+            std::future::ready(Ok(EventEnvelope {
                 id: String::default(),
                 source: None,
                 topic: event.topic(),

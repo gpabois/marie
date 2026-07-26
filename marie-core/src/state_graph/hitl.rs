@@ -44,10 +44,10 @@ impl std::fmt::Display for HitlFrameId {
 }
 
 impl std::str::FromStr for HitlFrameId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format de HitlFrameId invalide : {s}"))?;
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format de HitlFrameId invalide : {s}"))?;
         Ok(Self(session_part.parse()?, local_part.parse()?))
     }
 }

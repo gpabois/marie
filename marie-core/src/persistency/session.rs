@@ -18,7 +18,7 @@ fn encode(session: &YrsSession) -> Vec<u8> {
     session.diff_since(&StateVector::default())
 }
 
-fn decode(bytes: &[u8]) -> anyhow::Result<YrsSession> {
+fn decode(bytes: &[u8]) -> crate::Result<YrsSession> {
     YrsSession::from_diff(bytes)
 }
 
@@ -32,17 +32,17 @@ fn decode(bytes: &[u8]) -> anyhow::Result<YrsSession> {
 /// session (pas de fuite d'un `Id`/`T` générique dans la signature).
 #[async_trait::async_trait]
 pub trait SessionStore: Send + Sync {
-    async fn get(&self, id: &SessionId) -> anyhow::Result<Option<YrsSession>>;
-    async fn put(&self, id: &SessionId, value: &YrsSession) -> anyhow::Result<()>;
-    async fn delete(&self, id: &SessionId) -> anyhow::Result<()>;
+    async fn get(&self, id: &SessionId) -> crate::Result<Option<YrsSession>>;
+    async fn put(&self, id: &SessionId, value: &YrsSession) -> crate::Result<()>;
+    async fn delete(&self, id: &SessionId) -> crate::Result<()>;
     /// Toutes les sessions actuellement stockées.
-    async fn list(&self) -> anyhow::Result<Vec<YrsSession>>;
+    async fn list(&self) -> crate::Result<Vec<YrsSession>>;
 
     /// Diff de la session depuis `state_vector`, ou `None` si elle est
     /// inconnue de ce nœud — évite de transférer tout le contenu CRDT quand
     /// un pair n'a besoin que de ce qui lui manque (voir
     /// `RpcCall::FETCH_SESSION`).
-    async fn diff_since(&self, session_id: SessionId, state_vector: &StateVector) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn diff_since(&self, session_id: SessionId, state_vector: &StateVector) -> crate::Result<Option<Vec<u8>>> {
         let Some(session) = self.get(&session_id).await? else {
             return Ok(None);
         };
@@ -52,32 +52,32 @@ pub trait SessionStore: Send + Sync {
 
 #[async_trait::async_trait]
 impl SessionStore for RedbStore {
-    async fn get(&self, id: &SessionId) -> anyhow::Result<Option<YrsSession>> {
+    async fn get(&self, id: &SessionId) -> crate::Result<Option<YrsSession>> {
         self.get_raw(NAMESPACE, &id.to_string()).await?.as_deref().map(decode).transpose()
     }
 
-    async fn put(&self, id: &SessionId, value: &YrsSession) -> anyhow::Result<()> {
+    async fn put(&self, id: &SessionId, value: &YrsSession) -> crate::Result<()> {
         self.put_raw(NAMESPACE, &id.to_string(), encode(value)).await
     }
 
-    async fn delete(&self, id: &SessionId) -> anyhow::Result<()> {
+    async fn delete(&self, id: &SessionId) -> crate::Result<()> {
         self.delete_raw(NAMESPACE, &id.to_string()).await
     }
 
-    async fn list(&self) -> anyhow::Result<Vec<YrsSession>> {
+    async fn list(&self) -> crate::Result<Vec<YrsSession>> {
         self.list_raw(NAMESPACE).await?.iter().map(|bytes| decode(bytes)).collect()
     }
 }
 
 #[async_trait::async_trait]
 impl SessionStore for PostgresStore {
-    async fn get(&self, id: &SessionId) -> anyhow::Result<Option<YrsSession>> {
+    async fn get(&self, id: &SessionId) -> crate::Result<Option<YrsSession>> {
         let id = id.to_string();
         let row = sqlx::query("SELECT value FROM session WHERE id = $1").bind(&id).fetch_optional(self.pool()).await?;
         row.map(|row| decode(&row.get::<Vec<u8>, _>("value"))).transpose()
     }
 
-    async fn put(&self, id: &SessionId, value: &YrsSession) -> anyhow::Result<()> {
+    async fn put(&self, id: &SessionId, value: &YrsSession) -> crate::Result<()> {
         let id = id.to_string();
         let bytes = encode(value);
         sqlx::query("INSERT INTO session (id, value) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value")
@@ -88,13 +88,13 @@ impl SessionStore for PostgresStore {
         Ok(())
     }
 
-    async fn delete(&self, id: &SessionId) -> anyhow::Result<()> {
+    async fn delete(&self, id: &SessionId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM session WHERE id = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
     }
 
-    async fn list(&self) -> anyhow::Result<Vec<YrsSession>> {
+    async fn list(&self) -> crate::Result<Vec<YrsSession>> {
         let rows = sqlx::query("SELECT value FROM session").fetch_all(self.pool()).await?;
         rows.iter().map(|row| decode(&row.get::<Vec<u8>, _>("value"))).collect()
     }
@@ -118,21 +118,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl SessionStore for MemoryStore {
-        async fn get(&self, id: &SessionId) -> anyhow::Result<Option<YrsSession>> {
+        async fn get(&self, id: &SessionId) -> crate::Result<Option<YrsSession>> {
             self.0.lock().unwrap().get(id).map(|bytes| decode(bytes)).transpose()
         }
 
-        async fn put(&self, id: &SessionId, value: &YrsSession) -> anyhow::Result<()> {
+        async fn put(&self, id: &SessionId, value: &YrsSession) -> crate::Result<()> {
             self.0.lock().unwrap().insert(*id, encode(value));
             Ok(())
         }
 
-        async fn delete(&self, id: &SessionId) -> anyhow::Result<()> {
+        async fn delete(&self, id: &SessionId) -> crate::Result<()> {
             self.0.lock().unwrap().remove(id);
             Ok(())
         }
 
-        async fn list(&self) -> anyhow::Result<Vec<YrsSession>> {
+        async fn list(&self) -> crate::Result<Vec<YrsSession>> {
             self.0.lock().unwrap().values().map(|bytes| decode(bytes)).collect()
         }
     }

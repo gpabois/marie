@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{AgentId, status::AgentStatus},
+    agent::{AgentFrameId, status::AgentStatus},
     id::ID,
     session::SessionId,
     state_graph::{executable::OrchestrationStrategy, frame::GraphFrameId},
@@ -44,10 +44,10 @@ impl std::fmt::Display for OrchestrationFrameId {
 }
 
 impl std::str::FromStr for OrchestrationFrameId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format de OrchestrationFrameId invalide : {s}"))?;
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format de OrchestrationFrameId invalide : {s}"))?;
         Ok(Self(session_part.parse()?, local_part.parse()?))
     }
 }
@@ -77,7 +77,7 @@ impl<'de> Deserialize<'de> for OrchestrationFrameId {
 /// `StateGraph`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ChildRef {
-    Agent(AgentId),
+    Agent(AgentFrameId),
     Graph(GraphFrameId),
 }
 
@@ -91,14 +91,14 @@ impl std::fmt::Display for ChildRef {
 }
 
 impl std::str::FromStr for ChildRef {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (kind, id) = s.split_once(':').ok_or_else(|| anyhow::anyhow!("format de ChildRef invalide : {s}"))?;
+        let (kind, id) = s.split_once(':').ok_or_else(|| crate::err!("format de ChildRef invalide : {s}"))?;
         match kind {
             "agent" => Ok(ChildRef::Agent(id.parse()?)),
             "graph" => Ok(ChildRef::Graph(id.parse()?)),
-            _ => Err(anyhow::anyhow!("préfixe de ChildRef inconnu : {kind}")),
+            _ => Err(crate::err!("préfixe de ChildRef inconnu : {kind}")),
         }
     }
 }
@@ -126,7 +126,7 @@ impl<'de> Deserialize<'de> for ChildRef {
 /// (nœud [`Executable::Orchestration`](crate::state_graph::executable::Executable::Orchestration)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Waiter {
-    Agent(AgentId),
+    Agent(AgentFrameId),
     Graph(GraphFrameId),
 }
 

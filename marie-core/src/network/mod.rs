@@ -1,18 +1,13 @@
 use std::{ops::Deref, sync::Arc};
 
 
-use libp2p::PeerId;
+use futures::stream::BoxStream;
+use libp2p::{PeerId, gossipsub::IdentTopic};
 
-use crate::{layer::BoxLayer, network::{peer::NodeKind, protocol::{NetworkCommand, NetworkEvent}}};
+use crate::{events::EventEnvelope, node::NodeId, layer::BoxLayer, network::{protocol::{NetworkCommand, NetworkEvent}}};
 
-pub mod peer;
-#[cfg(feature = "catalog")]
-pub mod catalog;
 mod swarm;
 pub mod persistency;
-pub mod rpc;
-pub mod mux;
-pub mod bootstrap;
 pub mod loopback;
 pub mod protocol;
 
@@ -33,8 +28,23 @@ impl Deref for LocalPeerId {
     }
 }
 
-pub trait NetworkStrategy<E=anyhow::Error> {
+pub trait NetworkStrategy<E=crate::Error> : Send + Sync + 'static {
     fn layer(&self) -> BoxLayer<NetworkCommand, NetworkEvent, E>;
+    fn execute(&self, cmd: NetworkCommand);
+    fn send_message(&self, data: Vec<u8>, to: NodeId) {
+        self.execute(NetworkCommand::Send(data, to))
+    }
+    fn stream_events(&self) -> BoxStream<'static, NetworkEvent>;
+
+    fn emit_event(&self, event: EventEnvelope) {
+        self.execute(NetworkCommand::Publish { topic: IdentTopic::new(event.topic), payload: event.payload });
+    }
+    fn subscribe(&self, topic: &str) {
+        self.execute(NetworkCommand::Subscribe(IdentTopic::new(topic)))
+    }
+    fn unsubscribe(&self, topic: &str) {
+        self.execute(NetworkCommand::Unsubscribe(IdentTopic::new(topic)));
+    }
     fn local_id(&self) -> LocalPeerId;
 }
 
@@ -42,8 +52,8 @@ pub trait NetworkStrategy<E=anyhow::Error> {
 pub struct Network(Arc<dyn NetworkStrategy>);
 
 impl Network {
-    pub fn swarm(kind: NodeKind) -> anyhow::Result<Self> {
-        let net = swarm::SwarmNetwork::new(kind)?;
+    pub fn swarm() -> crate::Result<Self> {
+        let net = swarm::SwarmNetwork::new()?;
         Ok(Self(Arc::new(net)))
     }
 }

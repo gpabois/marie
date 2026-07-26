@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+marie-macros = { path = "../marie-macros" }
 marie-core = { path = "../marie-core", default-features = false }
 marie-gateway = { path = "../marie-gateway", optional = true }
 marie-ws = { path = "../marie-ws", optional = true }

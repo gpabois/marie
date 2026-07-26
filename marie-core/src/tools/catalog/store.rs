@@ -16,7 +16,7 @@ use crate::{
 /// Reconstitue un [`Tool`] depuis une ligne de la table `tool` (voir
 /// `migrations/0005_tool.sql`) — symétrique de l'insertion dans
 /// [`PgStore::insert`]/[`PgStore::replace`].
-fn decode_row(row: &PgRow) -> anyhow::Result<ToolDefinition> {
+fn decode_row(row: &PgRow) -> crate::Result<ToolDefinition> {
     Ok(ToolDefinition {
         name: ToolId::from(row.try_get::<String, _>("name")?),
         description: row.try_get("description")?,
@@ -32,17 +32,17 @@ fn decode_row(row: &PgRow) -> anyhow::Result<ToolDefinition> {
 /// [`crate::expert::Expert`], un [`Tool`] ne porte pas de champ `id` distinct.
 #[async_trait]
 pub trait ToolStore: Send + Sync + Clone {
-    async fn get(self, id: ToolId) -> anyhow::Result<Option<ToolDefinition>>;
-    async fn insert(self, value: ToolDefinition) -> anyhow::Result<()>;
-    async fn replace(self, value: ToolDefinition) -> anyhow::Result<()>;
-    async fn delete(self, id: ToolId) -> anyhow::Result<()>;
+    async fn get(self, id: ToolId) -> crate::Result<Option<ToolDefinition>>;
+    async fn insert(self, value: ToolDefinition) -> crate::Result<()>;
+    async fn replace(self, value: ToolDefinition) -> crate::Result<()>;
+    async fn delete(self, id: ToolId) -> crate::Result<()>;
     /// Toutes les entrées actuellement stockées.
-    async fn list(self) -> anyhow::Result<Vec<ToolDefinition>>;
+    async fn list(self) -> crate::Result<Vec<ToolDefinition>>;
 }
 
 #[async_trait]
 impl ToolStore for PgStore {
-    async fn get(self, id: ToolId) -> anyhow::Result<Option<ToolDefinition>> {
+    async fn get(self, id: ToolId) -> crate::Result<Option<ToolDefinition>> {
         let id = id.to_string();
         let row = sqlx::query("SELECT name, description, parameters_schema FROM tool WHERE name = $1")
             .bind(&id)
@@ -51,7 +51,7 @@ impl ToolStore for PgStore {
         row.as_ref().map(decode_row).transpose()
     }
 
-    async fn insert(self, value: ToolDefinition) -> anyhow::Result<()> {
+    async fn insert(self, value: ToolDefinition) -> crate::Result<()> {
         let name = value.name.to_string();
 
         sqlx::query("INSERT INTO tool (name, description, parameters_schema) VALUES ($1, $2, $3)")
@@ -63,7 +63,7 @@ impl ToolStore for PgStore {
         Ok(())
     }
 
-    async fn replace(self, value: ToolDefinition) -> anyhow::Result<()> {
+    async fn replace(self, value: ToolDefinition) -> crate::Result<()> {
         let name = value.name.to_string();
 
         sqlx::query("UPDATE tool SET description = $2, parameters_schema = $3 WHERE name = $1")
@@ -75,13 +75,13 @@ impl ToolStore for PgStore {
         Ok(())
     }
 
-    async fn delete(self, id: ToolId) -> anyhow::Result<()> {
+    async fn delete(self, id: ToolId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM tool WHERE name = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
     }
 
-    async fn list(self) -> anyhow::Result<Vec<ToolDefinition>> {
+    async fn list(self) -> crate::Result<Vec<ToolDefinition>> {
         let rows = sqlx::query("SELECT name, description, parameters_schema FROM tool").fetch_all(self.pool()).await?;
         rows.iter().map(decode_row).collect()
     }
@@ -91,11 +91,11 @@ impl ToolStore for PgStore {
 /// [`crate::session::store`] (`Command`) pour la raison de cette indirection
 /// par acteur plutôt qu'un accès direct au store depuis chaque appelant.
 enum Command {
-    Get(ToolId, oneshot::Sender<anyhow::Result<Option<ToolDefinition>>>),
-    List(oneshot::Sender<anyhow::Result<Vec<ToolDefinition>>>),
-    Insert(ToolDefinition, oneshot::Sender<anyhow::Result<()>>),
-    Replace(ToolDefinition, oneshot::Sender<anyhow::Result<()>>),
-    Delete(ToolId, oneshot::Sender<anyhow::Result<()>>),
+    Get(ToolId, oneshot::Sender<crate::Result<Option<ToolDefinition>>>),
+    List(oneshot::Sender<crate::Result<Vec<ToolDefinition>>>),
+    Insert(ToolDefinition, oneshot::Sender<crate::Result<()>>),
+    Replace(ToolDefinition, oneshot::Sender<crate::Result<()>>),
+    Delete(ToolId, oneshot::Sender<crate::Result<()>>),
     Shutdown,
 }
 
@@ -155,31 +155,31 @@ pub struct ToolStoreClient(mpsc::UnboundedSender<Command>, Arc<Handler>);
 
 #[async_trait]
 impl ToolStore for ToolStoreClient {
-    async fn get(self, id: ToolId) -> anyhow::Result<Option<ToolDefinition>> {
+    async fn get(self, id: ToolId) -> crate::Result<Option<ToolDefinition>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Get(id, tx))?;
         rx.await?
     }
 
-    async fn insert(self, value: ToolDefinition) -> anyhow::Result<()> {
+    async fn insert(self, value: ToolDefinition) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Insert(value, tx))?;
         rx.await?
     }
 
-    async fn replace(self, value: ToolDefinition) -> anyhow::Result<()> {
+    async fn replace(self, value: ToolDefinition) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Replace(value, tx))?;
         rx.await?
     }
 
-    async fn delete(self, id: ToolId) -> anyhow::Result<()> {
+    async fn delete(self, id: ToolId) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Delete(id, tx))?;
         rx.await?
     }
 
-    async fn list(self) -> anyhow::Result<Vec<ToolDefinition>> {
+    async fn list(self) -> crate::Result<Vec<ToolDefinition>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::List(tx))?;
         rx.await?

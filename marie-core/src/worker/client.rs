@@ -6,7 +6,7 @@ use tokio::{select, sync::{self, mpsc, watch}};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    annuary::Annuary, di::{Factory, Get}, id, job::{Job, JobId, JobInstance, JobState}, layer::{Layer, LayerExt as _}, network::{Network, bootstrap::{self, BootstrapClient}}, pubsub::layers::PubSubLayer, rpc::{RpcClient, Void, client::RpcCallArgs}, worker::{NS_WORKER_WATCHDOG, RPC_WATCH_JOB, WorkerError, WorkerEvent, layers::WorkerEventLayer}
+    _annuary::Annuary, di::{Factory, Get}, id, job::{Job, JobId, JobInstance, JobState}, layer::{Layer, LayerExt as _}, network::{Network, bootstrap::{self, BootstrapClient}}, events::layers::EventLayer, rpc::{RpcClient, Void, client::RpcCallArgs}, worker::{NS_WORKER_WATCHDOG, RPC_WATCH_JOB, WorkerError, WorkerEvent, layers::WorkerEventLayer}
 };
 
 type JobTrackers = Arc<Mutex<HashMap<JobId, TrackedJobInfo>>>;
@@ -38,7 +38,7 @@ impl<C> Factory<C> for WorkerClient where C: Get<Network> + Get<Annuary> + Get<R
         Actor::create(
             network
                 .layer()
-                .chain::<PubSubLayer, _>(())
+                .chain::<EventLayer, _>(())
                 .chain::<WorkerEventLayer, _>(()),
             args
         )

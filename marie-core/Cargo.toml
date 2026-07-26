@@ -4,6 +4,7 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
+marie-macros = { path = "../marie-macros" }
 async-trait = "0.1"
 thiserror = "2.0"
 anyhow = "1.0.102"
@@ -69,7 +70,8 @@ json-patch.workspace = true
 jsonpath-rust.workspace = true
 jsonschema.workspace = true
 schemars.workspace = true
-
+moka = {workspace = true, features=["future"]}
+openraft.workspace = true
 
 [dev-dependencies]
 wiremock = "0.6.5"

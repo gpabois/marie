@@ -2,7 +2,7 @@ use futures::{SinkExt as _, StreamExt as _, stream::BoxStream};
 
 use crate::{
     layer::{IntoService, Layer, LayerChain},
-    pubsub::PubSubMessage,
+    events::EventEnvelope,
     session::{
         SessionEvent,
         server::{SessionServer, SessionServerActor, SessionServerArgs},
@@ -15,7 +15,7 @@ pub struct SessionEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver)
 impl Layer for SessionEventLayer {
     type Send = SessionEvent;
     type Received = SessionEvent;
-    type Sender = BoxSink<'static, Self::Send, anyhow::Error>;
+    type Sender = BoxSink<'static, Self::Send, crate::Error>;
     type Receiver = BoxStream<'static, Self::Received>;
 
     fn split(self) -> (Self::Sender, Self::Receiver) {
@@ -33,7 +33,7 @@ impl<T> IntoService<SessionServer, SessionServerArgs> for T
     }
 }
 
-impl<L> LayerChain<L, ()> for SessionEventLayer where L: Layer<Send=PubSubMessage, Received=PubSubMessage> {
+impl<L> LayerChain<L, ()> for SessionEventLayer where L: Layer<Send=EventEnvelope, Received=EventEnvelope> {
 
     /// Chaque [`SessionEvent`] est publié deux fois — sur son topic dédié
     /// (voir [`SessionEvent::topic`]) et sur le topic global (voir
@@ -46,8 +46,8 @@ impl<L> LayerChain<L, ()> for SessionEventLayer where L: Layer<Send=PubSubMessag
         let tx = tx.with_flat_map(|event: SessionEvent| {
             let payload = serde_json::to_vec(&event).unwrap();
 
-            let dedicated = PubSubMessage { id: String::default(), source: None, topic: event.topic(), payload: payload.clone() };
-            let global = PubSubMessage { id: String::default(), source: None, topic: event.global_topic(), payload };
+            let dedicated = EventEnvelope { id: String::default(), source: None, topic: event.topic(), payload: payload.clone() };
+            let global = EventEnvelope { id: String::default(), source: None, topic: event.global_topic(), payload };
 
             futures::stream::iter([Ok(dedicated), Ok(global)])
         }).boxed_sink();

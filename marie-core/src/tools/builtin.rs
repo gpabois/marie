@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::{
-    session::{SessionId, client::SessionClient}, state::StateLocation, tools::{ToolDefinition, Toolable}, worker::JobContext, workspace::{WorkspaceId, client::WorkspaceClient},
+    session::{SessionId, client::SessionClient}, state::StateLocation, tools::{ToolDefinition, Toolable}, workspace::{WorkspaceId, client::WorkspaceClient},
 };
 
 #[cfg(feature = "worker")]
@@ -28,7 +28,7 @@ pub struct QueryState{
 }
 
 #[async_trait]
-impl<Cx> Toolable<Cx> for QueryState where Cx: Send + Sync + 'static {
+impl Toolable for QueryState {
     const NAME: &str = "marie/tools/query-state";
 
     const DESCRIPTION: &str = "Lit une ou plusieurs variables de la session courante via une expression JSONPath (ex: \"$.budget\", \
@@ -39,7 +39,7 @@ impl<Cx> Toolable<Cx> for QueryState where Cx: Send + Sync + 'static {
 
 
     #[cfg(feature = "tool-executor")]
-    async fn execute(self, cx: Cx, args: Self::Args) -> anyhow::Result<Self::Return> {
+    async fn execute(self, args: Self::Args) -> crate::Result<Self::Return> {
         let session = match args.location {
             StateLocation::InSession(session_id) => {
                 let session = self.sessions.query()
@@ -197,12 +197,12 @@ pub fn register_builtins_tools_executors(args: ToolWorkerArgs, sessions: Session
     let query_sessions = sessions.clone();
     let args = args.add(VARS_QUERY_TOOL, move |session_id: SessionId, request: VarsQueryArgs| {
         let sessions = query_sessions.clone();
-        async move { sessions.query_state(session_id, request.path).await.map_err(anyhow::Error::from) }
+        async move { sessions.query_state(session_id, request.path).await.map_err(crate::Error::from) }
     });
 
     args.add(VARS_PATCH_TOOL, move |session_id: SessionId, request: VarsPatchArgs| {
         let sessions = sessions.clone();
-        async move { sessions.patch_vars(session_id, request.path, request.value).await.map_err(anyhow::Error::from) }
+        async move { sessions.patch_vars(session_id, request.path, request.value).await.map_err(crate::Error::from) }
     })
 }
 

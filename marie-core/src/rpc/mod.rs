@@ -1,124 +1,37 @@
 pub mod client;
 #[cfg(feature ="rpc-server")]
 mod server;
-pub mod register;
-pub mod layers;
-pub mod event;
+
+pub mod protocol;
 
 use async_trait::async_trait;
-pub use event::{RpcEvent, RpcEventKind};
-use libp2p::PeerId;
-
-use std::hash::Hash;
 
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use thiserror::Error;
-use crate::id::ID;
 
 #[cfg(feature ="rpc-server")]
 pub use server::RpcServer;
 pub use client::RpcClient;
+pub use marie_macros::core_rpc;
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct RpcCallId(ID);
+use crate::node::NodeId;
+use crate::post::PostError;
 
-#[derive(Clone, Serialize, Deserialize)]
-pub struct RpcCall {
-    pub id: RpcCallId,
-    pub name: String,
-    pub args: serde_json::Value,
-    pub destination: Option<PeerId>,
-    pub source: Option<PeerId>
-}
 
-#[derive(Serialize, Deserialize)]
-pub enum RpcMessage {
-    Call(RpcCall),
-    Ack(RpcAck),
-    Reply(RpcReply)
-}
-
-impl RpcMessage {
-    pub fn destination(&self) -> Option<PeerId> {
-        use RpcMessage::{Call, Ack, Reply};
-
-        match self {
-            Call(call) => call.destination.clone(),
-            Ack(ack) => ack.destination.clone(),
-            Reply(reply) => reply.destination.clone()
-        }
-    }
-
-    pub fn source(&self) -> Option<PeerId> {
-        use RpcMessage::{Call, Ack, Reply};
-
-        match self {
-            Call(call) => call.source.clone(),
-            Ack(ack) => ack.source.clone(),
-            Reply(reply) => reply.source.clone()
-        }
-    }
-
-    pub fn set_destination(&mut self, destination: Option<PeerId>) {
-        use RpcMessage::{Call, Ack, Reply};
-
-        match self {
-            Call(call) => call.destination = destination,
-            Ack(ack) => ack.destination = destination,
-            Reply(reply) => reply.destination = destination
-        }
-    }
-
-    pub fn set_source(&mut self, source: Option<PeerId>) {
-        use RpcMessage::{Call, Ack, Reply};
-
-        match self {
-            Call(call) => call.source = source,
-            Ack(ack) => ack.source = source,
-            Reply(reply) => reply.source = source
-        }
-    }
-}
-
-#[derive(Debug, Error, Serialize, Deserialize)]
+#[derive(Clone, Debug, Error, Serialize, Deserialize)]
 pub enum RpcError {
-    #[error("{0}")]
-    Custom(String),
-    #[error("erreur lors des opérations serde: {0}")]
-    SerializerError(String),
+    #[error("erreur lors de la désérialization: {0}")]
+    DeserializeError(String),
+    #[error("erreur lors de l'envoi/réception du message")]
+    PostError(#[from] PostError),
     #[error("time-out de l'appel distant")]
     TimeOut,
-    #[error("aucun exécuteur n'a été trouvé pour cette procédure")]
-    NoExecutorFound,
+    #[error("aucun exécuteur n'a été trouvé pour cette procédure {0}")]
+    NoExecutorFound(String),
     #[error("arrêt du serveur d'appel distant")]
     Shutdown
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct RpcReply {
-    id: RpcCallId,
-    result: RpcResult,
-    destination: Option<PeerId>,
-    source: Option<PeerId>
-}
-
-/// Accusé de réception envoyé par le serveur dès qu'un appel est pris en
-/// charge (exécuteur trouvé, tâche lancée) — avant même que le résultat ne
-/// soit disponible. Permet au client de distinguer un appel toujours en
-/// cours d'exécution d'un appel perdu, sans attendre la [`RpcReply`] finale
-/// — voir [`crate::rpc::client::RpcClient`].
-#[derive(Serialize, Deserialize)]
-pub struct RpcAck {
-    pub id: RpcCallId,
-    pub destination: Option<PeerId>,
-    pub source: Option<PeerId>
-}
-
-#[derive(Serialize, Deserialize)]
-pub enum RpcResult {
-    Ok(serde_json::Value),
-    Error(RpcError)
-}
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Void;
@@ -149,7 +62,7 @@ pub trait RemoteProcedureCall: Sized {
     type Return: Serialize + DeserializeOwned;
 
     #[cfg(feature = "rpc-executor")]
-    async fn execute(self, args: Self::Args, caller: PeerId) -> Self::Return;
+    async fn execute(self, args: Self::Args, caller: NodeId) -> Self::Return;
 
     #[cfg(feature = "rpc-executor")]
     fn register(self, rpc: &mut RpcServer) where Self: Clone + Send + Sync + 'static {

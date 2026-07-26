@@ -23,7 +23,7 @@ pub struct ReencryptReport {
 /// Déclenchement volontairement manuel (pas de tâche planifiée
 /// automatique) : c'est une action d'incident-response, à l'appelant de
 /// décider quand la lancer.
-pub async fn reencrypt_model_store(store: ModelStoreClient, secret: &SecretManager) -> anyhow::Result<ReencryptReport> {
+pub async fn reencrypt_model_store(store: ModelStoreClient, secret: &SecretManager) -> crate::Result<ReencryptReport> {
     let target = secret.current_epoch();
     let mut report = ReencryptReport::default();
 
@@ -47,7 +47,7 @@ pub async fn reencrypt_model_store(store: ModelStoreClient, secret: &SecretManag
 /// de modèles contient encore une entrée chiffrée sous `epoch`. Ne consulte
 /// que l'epoch tagué sur chaque entrée (voir [`StoredModel::key_epoch`]),
 /// sans tenter de déchiffrer quoi que ce soit.
-pub async fn assert_no_rows_at_epoch(store: ModelStoreClient, epoch: KeyEpoch) -> anyhow::Result<()> {
+pub async fn assert_no_rows_at_epoch(store: ModelStoreClient, epoch: KeyEpoch) -> crate::Result<()> {
     let remaining = store
         .list()
         .await?
@@ -55,7 +55,7 @@ pub async fn assert_no_rows_at_epoch(store: ModelStoreClient, epoch: KeyEpoch) -
         .filter(|stored| stored.key_epoch() == epoch)
         .count();
 
-    anyhow::ensure!(
+    crate::ensure!(
         remaining == 0,
         "{remaining} entrée(s) du catalogue de modèles encore chiffrée(s) sous l'epoch {epoch} : lancer reencrypt_model_store avant de la retirer"
     );

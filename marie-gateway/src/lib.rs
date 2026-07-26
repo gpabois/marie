@@ -9,7 +9,7 @@ use futures::{Sink, SinkExt, Stream, StreamExt};
 use marie_core::{
     client::Client,
     layer::Layer,
-    pubsub::{PubSubMessage, layers::PubSubLayer},
+    events::{EventEnvelope, layers::EventLayer},
     session::{Session, SessionEvent, SessionId, client::SessionClient},
     workspace::{WorkspaceEvent, WorkspaceId, client::WorkspaceClient},
 };
@@ -91,7 +91,7 @@ pub struct MarieGatewayActor {
 
     // Flux réseau déjà décodé en `PubSubMessage` (via `PubSubLayer`), déjà
     // `BoxStream` donc déjà `Pin<Box<...>>`/`Unpin`.
-    network_rx: futures::stream::BoxStream<'static, PubSubMessage>,
+    network_rx: futures::stream::BoxStream<'static, EventEnvelope>,
 
     sessions: SessionClient,
     workspaces: WorkspaceClient,
@@ -124,7 +124,7 @@ impl MarieGatewayActor {
         // `broadcast::Receiver` de `Network`) AVANT de demander les
         // abonnements gossipsub eux-mêmes, pour ne rater aucun
         // `PubSubReceived` émis entre les deux.
-        let pubsub = PubSubLayer::new(network.transport());
+        let pubsub = EventLayer::new(network.transport());
         let (_pubsub_tx, network_rx) = pubsub.split();
 
         // Abonnements effectifs : un topic global par type d'évènement,
@@ -364,7 +364,7 @@ impl MarieGatewayActor {
     /// Filtre les évènements réseau : jamais transmis si l'id concerné
     /// n'est pas dans `authorized_sessions`/`authorized_workspaces` — c'est
     /// ici que "ne jamais laisser passer" s'applique côté évènements.
-    async fn handle_network_message(&mut self, msg: PubSubMessage) {
+    async fn handle_network_message(&mut self, msg: EventEnvelope) {
         use protocol::MarieGatewayEvent as E;
 
         if SessionEvent::is(&msg) {

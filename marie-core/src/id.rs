@@ -1,4 +1,4 @@
-use anyhow::{anyhow, bail};
+use crate::{err, bail};
 use bytemuck::{Pod, Zeroable};
 use rand_xoshiro::{
     Xoshiro256PlusPlus,
@@ -41,11 +41,11 @@ impl ID {
 }
 
 impl TryFrom<&[u8]> for ID {
-    type Error = anyhow::Error;
+    type Error = crate::Error;
 
     fn try_from(bytes: &[u8]) -> Result<Self, Self::Error> {
         bytemuck::try_from_bytes(bytes).copied().map_err(|_| {
-            anyhow!("La slice d'octets n'a pas la bonne taille ou un mauvais alignement")
+            err!("La slice d'octets n'a pas la bonne taille ou un mauvais alignement")
         })
     }
 }
@@ -64,7 +64,7 @@ impl std::fmt::Display for ID {
 }
 
 impl FromStr for ID {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if s.len() != 32 {

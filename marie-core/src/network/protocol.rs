@@ -1,22 +1,17 @@
-use libp2p::{PeerId, rendezvous::{Namespace, Ttl}};
+use libp2p::{PeerId, gossipsub, rendezvous::{Namespace, Ttl}};
+use tokio::sync::oneshot;
 
-use crate::network::mux::Frame;
+use crate::node::NodeId;
 
 
 pub enum NetworkCommand {
     Listen(oneshot::Sender<()>),
-    SendFrame(Frame),
+    Send(Vec<u8>, NodeId),
     Subscribe(gossipsub::IdentTopic),
+    Unsubscribe(gossipsub::IdentTopic),
     Publish {
         topic: gossipsub::IdentTopic,
         payload: Vec<u8>
-    },
-    /// Enregistre le pair dans un espace de nom
-    /// auprès du serveur bootstrap
-    RegisterPeer {
-        namespaces: Vec<Namespace>,
-        bootstrap_peer_id: PeerId,
-        ttl: Option<Ttl>
     },
     Shutdown,
 }
@@ -24,7 +19,10 @@ pub enum NetworkCommand {
 
 #[derive(Clone)]
 pub enum NetworkEvent {
-    ReceivedFrame(Frame),
+    ReceivedMessage {
+        message: Vec<u8>,
+        source: NodeId
+    },
     BootstrapDiscovered {
         peer_id: PeerId
     },
@@ -36,7 +34,15 @@ pub enum NetworkEvent {
     PeerDisconnected {
         peer_id: PeerId,
     },
-    PubSubReceived {
+    /// Première connexion établie avec `peer_id` (voir
+    /// `SwarmEvent::ConnectionEstablished`) — consommé notamment par
+    /// [`crate::annuary::Annuary`] pour découvrir les pairs du cluster sans
+    /// dépendre du mécanisme de rendez-vous par namespace
+    /// (`network::bootstrap::BootstrapClient`).
+    PeerConnected {
+        peer_id: PeerId,
+    },
+    EventReceived {
         id: String,
         topic: String,
         data: Vec<u8>,

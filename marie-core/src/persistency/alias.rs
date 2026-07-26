@@ -14,16 +14,16 @@ pub trait AliasCatalog: Send + Sync {
     /// même logique que le routage de montage dans `VFS::resolve_mount`.
     /// Renvoie `path` avec ce préfixe substitué par sa cible, ou `None` si
     /// aucun alias ne préfixe `path`.
-    async fn resolve_prefix(&self, path: &str) -> anyhow::Result<Option<String>>;
+    async fn resolve_prefix(&self, path: &str) -> crate::Result<Option<String>>;
 
     /// Définit (crée ou remplace) l'alias `from -> to`.
-    async fn set(&self, from: &str, to: &str) -> anyhow::Result<()>;
+    async fn set(&self, from: &str, to: &str) -> crate::Result<()>;
 
     /// Retire l'alias `from` — sans effet s'il n'existe pas.
-    async fn remove(&self, from: &str) -> anyhow::Result<()>;
+    async fn remove(&self, from: &str) -> crate::Result<()>;
 
     /// Tous les alias de ce scope, `(from, to)`.
-    async fn list(&self) -> anyhow::Result<Vec<(String, String)>>;
+    async fn list(&self) -> crate::Result<Vec<(String, String)>>;
 }
 
 /// [`AliasCatalog`] adossé à PostgreSQL — une ligne par alias plutôt qu'un
@@ -58,7 +58,7 @@ impl AliasCatalog for PostgresAliasCatalog {
     /// Charge tous les alias du scope (faible cardinalité attendue, comme le
     /// nombre de montages d'un `VFS`) et fait le plus-long-préfixe côté Rust
     /// plutôt qu'en SQL — même approche que `VFS::resolve_mount`.
-    async fn resolve_prefix(&self, path: &str) -> anyhow::Result<Option<String>> {
+    async fn resolve_prefix(&self, path: &str) -> crate::Result<Option<String>> {
         let aliases = self.list().await?;
 
         let best = aliases
@@ -69,7 +69,7 @@ impl AliasCatalog for PostgresAliasCatalog {
         Ok(best.map(|(from, to)| format!("{to}{}", &path[from.len()..])))
     }
 
-    async fn set(&self, from: &str, to: &str) -> anyhow::Result<()> {
+    async fn set(&self, from: &str, to: &str) -> crate::Result<()> {
         sqlx::query("INSERT INTO fs_alias (scope, from_path, to_path) VALUES ($1, $2, $3) ON CONFLICT (scope, from_path) DO UPDATE SET to_path = EXCLUDED.to_path")
             .bind(&self.scope)
             .bind(from)
@@ -79,7 +79,7 @@ impl AliasCatalog for PostgresAliasCatalog {
         Ok(())
     }
 
-    async fn remove(&self, from: &str) -> anyhow::Result<()> {
+    async fn remove(&self, from: &str) -> crate::Result<()> {
         sqlx::query("DELETE FROM fs_alias WHERE scope = $1 AND from_path = $2")
             .bind(&self.scope)
             .bind(from)
@@ -88,7 +88,7 @@ impl AliasCatalog for PostgresAliasCatalog {
         Ok(())
     }
 
-    async fn list(&self) -> anyhow::Result<Vec<(String, String)>> {
+    async fn list(&self) -> crate::Result<Vec<(String, String)>> {
         let rows = sqlx::query("SELECT from_path, to_path FROM fs_alias WHERE scope = $1").bind(&self.scope).fetch_all(&self.pool).await?;
         Ok(rows.iter().map(|row| (row.get("from_path"), row.get("to_path"))).collect())
     }

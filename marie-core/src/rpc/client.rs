@@ -1,184 +1,84 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
-use futures::{SinkExt as _, StreamExt};
+use chrono::Utc;
+use futures::StreamExt;
 use libp2p::PeerId;
+use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::{select, sync::{mpsc, oneshot}};
-use tracing::warn;
+use serde_json::Value;
+use tokio::{select, sync::oneshot};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    di::{Factory, Get}, id::IdGenerator, layer::{Layer, LayerExt}, network::{Network, mux::FrameLayer, rpc::RpcMuxLayer}, rpc::{RemoteProcedureCall, RpcAck, RpcCall, RpcCallId, RpcError, RpcMessage, RpcReply, RpcResult}
+    di::{Factory, Get}, id::IdGenerator, node::NodeId, post::PostOffice, rpc::{RemoteProcedureCall, RpcError, protocol::RpcId}
 };
+
+use super::protocol::*;
 
 #[derive(Clone)]
 pub struct RpcClient {
-    tx: mpsc::UnboundedSender<Command>,
+    postoff: PostOffice,
     id: Arc<IdGenerator>,
-    // used to stop the actor if the last client has been dropped
-    inner: Arc<RpcClientInner>
+    tracked: Arc<Mutex<HashMap<RpcId, RpcTracker>>>
 }
 
-impl<C> Factory<C> for RpcClient where C: Get<Network> {
-    fn create(container: &C) -> Self {
-        let network: Network = container.get();
-        let actor = Actor::default();
-        actor.run(network.layer()
-            .chain::<FrameLayer, _>(())
-            .chain::<RpcMuxLayer, _>(())
-        )
+impl RpcClient {
+    pub fn new(
+        postoff: PostOffice
+    ) -> Self {
+        let client = RpcClient {
+            postoff, 
+            id: Arc::new(IdGenerator::default()),
+            tracked: Arc::new(Mutex::new(HashMap::default()))
+        };
+
+        tokio::spawn(client.clone().run());
+
+        client
     }
-}
 
-impl Actor {
-    pub fn run(self, layer: impl Layer<Send=RpcMessage, Received=RpcMessage>) -> RpcClient 
-    {   
-        let (tx, rx) = layer.split();
-        let mut outcoming = Box::pin(tx);
-        let mut incoming = Box::pin(rx);
-
-        let (out_tx, mut out_rx) = mpsc::unbounded_channel::<RpcCall>();
-        let (cmd_tx, cmd_rx) = mpsc::unbounded_channel::<Command>();
-        let (ev_tx, mut ev_rx) = mpsc::unbounded_channel::<Event>();
-
-        let ev_tx_1 = ev_tx.clone();
-        let outcoming_task = tokio::spawn(async move {
-            use RpcMessage::Call;
-
-            loop {
-                select! {
-                    Some(call) = out_rx.recv() => {
-                        let id = call.id;
-
-                        if call.destination.is_none() {
-                            warn!("no RPC server found to execute {}", call.name);
-                                let reply = RpcReply {
-                                    id,
-                                    destination: None,
-                                    source: None,
-                                    result: RpcResult::Error(RpcError::NoExecutorFound)
-                                };
-                                
-                                let _ = ev_tx_1.send(Event::OnReply(reply));
-                                continue;
-                        }
-
-
-                        let id = call.id;
-                        
-                        match outcoming.send(Call(call)).await {
-                            Err(_) => {
-                                let reply = RpcReply {
-                                    id,
-                                    destination: None,
-                                    source: None,
-                                    result: RpcResult::Error(RpcError::Custom(String::default()))
-                                };
-                                
-                                let _ = ev_tx_1.send(Event::OnReply(reply));
-                            },
-                            _ => {}
-                        }
+    async fn run(self) {
+        use RpcMessage::{Reply, Ack};
+        let mut rx = self.postoff.stream_messages::<RpcMessage>();
+        loop {
+            select! {
+                Some(msg) = rx.next() => {
+                    match msg.payload {
+                        Reply(reply) => self.handle_reply(reply),
+                        Ack(ack) => self.handle_ack(ack),
+                        _ => {}
                     }
                 }
             }
-        });
-
-        let ev_tx_2 = ev_tx.clone();
-        let incoming_task = tokio::spawn(async move {
-            loop {
-                select! {
-                    Some(msg) = incoming.next() => {
-                        match msg {
-                            RpcMessage::Reply(reply) => {
-                                let _ = ev_tx_2.send(Event::OnReply(reply));
-                            },
-                            RpcMessage::Ack(ack) => {
-                                let _ = ev_tx_2.send(Event::OnAck(ack));
-                            },
-                            RpcMessage::Call(_) => {
-                                // le client ne reçoit jamais d'appel entrant
-                            }
-                        }
-                    }
-                }
-            }
-        });
-
-        tokio::spawn(async move {
-            let mut ongoings = HashMap::<RpcCallId, RpcHandler>::default();
-            let timeout = Duration::from_secs(30);
-            let mut interval = tokio::time::interval(Duration::from_millis(10));
-
-            loop {
-                select! {
-                    _ = interval.tick() => {
-                        let now = std::time::Instant::now();
-                        let expired =  ongoings
-                            .iter()
-                            .filter(|(_, hdlr)| hdlr.sent_at + timeout < now)
-                            .map(|(id, _)| *id)
-                            .collect::<Vec<_>>();
-
-                        for exp in expired {
-                            let hdlr = ongoings.remove(&exp).unwrap();
-                            let _ = hdlr.tx.send(RpcResult::Error(RpcError::TimeOut));
-                        }
-                    },
-                    Some(event) = ev_rx.recv() => {
-                        match event {
-                            Event::Shutdown => {
-                                break;
-                            }
-                            Event::OnRequest(request) => {
-                                let hdlr = RpcHandler {
-                                    sent_at: std::time::Instant::now(),
-                                    tx: request.tx
-                                };
-
-                                ongoings.insert(request.id, hdlr);
-                                let _ = out_tx.send(request.call);
-                            },
-                            Event::OnReply(reply) => {
-                                if let Some(hdlr) = ongoings.remove(&reply.id) {
-                                    let _ = hdlr.tx.send(reply.result);
-                                }
-                            },
-                            Event::OnAck(ack) => {
-                                if let Some(hdlr) = ongoings.get_mut(&ack.id) {
-                                    hdlr.sent_at = std::time::Instant::now();
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            // shutdown
-            ongoings.into_iter().for_each(|(_, hdlr)| {
-                let _ = hdlr.tx.send(RpcResult::Error(RpcError::Shutdown));
-            })
-        });
-
-        let id = IdGenerator::default();
-
-        let inner = Arc::new(RpcClientInner(cmd_tx.clone()));
-
-        RpcClient {
-            tx: cmd_tx,
-            id: Arc::new(id),
-            inner
         }
     }
+
+    fn handle_ack(&self, ack: RpcAck) {
+        if let Some(tracker) = self.tracked.lock().get_mut(&ack.id) {
+            // impl. ack
+        }
+    }
+
+    fn handle_reply(&self, reply: RpcReply) {
+        if let Some(tracker) = self.tracked.lock().remove(&reply.id) {
+            let _ = tracker.tx.send(reply.result);
+        }
+    }
+
+    fn send(&self, msg: impl Into<RpcMessage>, destination: NodeId) -> Result<(), RpcError> {
+        self.postoff.send(msg, destination)?;
+        Ok(())
+    }
+
+    fn track(&self, id: RpcId, tracker: RpcTracker) {
+        self.tracked.lock().insert(id, tracker);
+    }
 }
 
-struct RpcClientInner(mpsc::UnboundedSender<Command>);
-
-impl Drop for RpcClientInner {
-    fn drop(&mut self) {
-        use Command::Shutdown;
-
-        self.0.send(Shutdown);
+impl<C> Factory<C> for RpcClient where C: Get<PostOffice> {
+    fn create(container: &C) -> Self {
+        let postoff: PostOffice = container.get();
+        Self::new(postoff)
     }
 }
 
@@ -188,10 +88,8 @@ pub struct RpcCallArgs {
     name: String,
     #[builder(setter(transform = |x: impl Serialize| serde_json::to_value(x).unwrap()))]
     args: serde_json::Value,
-    #[builder(default, setter(strip_option))]
-    source: Option<PeerId>,
-    #[builder(default, setter(strip_option))]
-    destination: Option<PeerId>
+    #[builder(setter(transform = |x: impl Into<NodeId>| x.into()))]
+    destination: NodeId
 }
 
 impl RpcCallArgs {
@@ -219,59 +117,31 @@ impl RpcClient {
     }
 
     pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
-        use Command::Execute;
-
-        let id = RpcCallId(self.id.next_id());
+        let id = RpcId(self.id.next_id());
         let call = RpcCall {
             id,
             name: args.name,
             args: args.args,
-            destination: args.destination,
-            source: args.source
         };
 
-        let (tx, rx) = oneshot::channel::<RpcResult>();
+        let (tx, rx) = oneshot::channel::<Result<Value, RpcError>>();
         
-        let request = RpcRequest {
-            id,
-            call,
-            tx,
+        let tracker = RpcTracker {
+            sent_at: Utc::now(),
+            tx
         };
-        
-        let _ = self.tx.send(Execute(request));
 
-        let res = rx.await.unwrap();
-        match res {
-            RpcResult::Ok(value) => Ok(serde_json::from_value(value).unwrap()),
-            RpcResult::Error(rpc_error) => Err(rpc_error),
-        }       
+        self.track(id, tracker);
+        self.send(call, args.destination)?;
+
+        let ret = rx.await.unwrap().and_then(|value| serde_json::from_value::<R>(value).map_err(|err| RpcError::DeserializeError(err.to_string())))?;
+        Ok(ret)
     }
 }
 
 
 
-struct RpcHandler {
-    sent_at: std::time::Instant,
-    tx: oneshot::Sender<RpcResult>
-}
-
-#[derive(Default)]
-struct Actor;
-
-struct RpcRequest {
-    id: RpcCallId,
-    call: RpcCall,
-    tx: oneshot::Sender<RpcResult>
-}
-
-enum Command {
-    Execute(RpcRequest),
-    Shutdown
-}
-
-enum Event {
-    OnReply(RpcReply),
-    OnAck(RpcAck),
-    OnRequest(RpcRequest),
-    Shutdown
+struct RpcTracker {
+    sent_at: chrono::DateTime<Utc>,
+    tx: oneshot::Sender<Result<Value, RpcError>>
 }

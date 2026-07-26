@@ -1,51 +1,39 @@
-use async_trait::async_trait;
 use futures::StreamExt as _;
+use marie_macros::core_job;
 
 use crate::{
     agent::{
-        AgentId,
+        AgentFrameId,
         frame::AgentFrame,
         context::{Context, ContextEntry},
         role::Role,
         status::AgentResponse,
     },
     hitl::Question,
-    job::Job,
-    model::{self, Model, ModelResponse, ModelStatus, client::ModelClient},
-    network::{bootstrap::BootstrapClient, worker::JobContext},
+    model::{self, Model, ModelResponse, ModelStatus, ModelClient},
+    network::bootstrap::BootstrapClient,
     rpc::{RpcClient, Void},
     session::{SessionLogId, client::SessionClient},
     state_graph::{hitl::HitlFrameId, orchestration::Waiter},
     tools::{ToolDefinition, ToolCall, ToolCallId, builtin::ASK_USER_INPUT_TOOL, client::ToolClient},
 };
 
-pub struct RunAgent {
-    rpc: RpcClient,
-    bootstrap: BootstrapClient,
-    sessions: SessionClient,
-    models: ModelClient,
-    tools: ToolClient
-}
 
-#[async_trait]
-impl Job for RunAgent {
-    const NAME: &'static str = "marie/sessions/run-agent";
-
-    type Args = AgentFrame;
-    type Return = Void;
-
-    async fn execute(self, args: Self::Args, cx: JobContext) ->  Result<Self::Return, anyhow::Error>  {
+core_job! {
+    #[job(name="/marie/sessions/run-agent")]
+    pub async fn run_agent(
+        self: Self<{models: ModelClient, tools: ToolClient, sessions: SessionClient}>,
+        frame: AgentFrame
+    ) -> Void {
         let tools: Vec<ToolDefinition> = self.tools
             .list()
             .await?
             .into_iter()
-            .filter(|tool| args.allowed_tools.contains(&tool.name))
+            .filter(|tool| frame.allowed_tools.contains(&tool.name))
             .collect();
 
-        let model = self.models.get(args.model).await?;
-
-        let outcome = run_turns(args.id, model, &tools, args.context, &self.sessions, &self.tools).await;
-
+        let model = self.models.get(frame.model).await?;
+        let outcome = run_turns(frame.id, model, &tools, frame.context, &self.sessions, &self.tools).await;
         match outcome {
             Ok(TurnOutcome::Completed(model_response)) => {
                 // RPC directe et synchrone (pas un évènement gossip) : le Job
@@ -54,7 +42,7 @@ impl Job for RunAgent {
                 // sélection déterministe du pair
                 // (SessionClient::select_catalog, un hash ring) fait déjà le
                 // travail de routage.
-                self.sessions.report_agent_run(args.id, AgentResponse::Finished { text: model_response.text }).await?;
+                self.sessions.report_agent_run(frame.id, AgentResponse::Finished { text: model_response.text }).await?;
             }
             Ok(TurnOutcome::Yielded) => {
                 // Rien à rapporter ici : `run_turns` a déjà persisté
@@ -65,7 +53,7 @@ impl Job for RunAgent {
                 // `session::server::report_tool_execution`).
             }
             Err(error) => {
-                self.sessions.report_agent_run(args.id, AgentResponse::Failed { error }).await?;
+                self.sessions.report_agent_run(frame.id, AgentResponse::Failed { error }).await?;
             }
         }
 
@@ -103,7 +91,7 @@ enum TurnOutcome {
 /// `log_id`), tandis que le [`ModelStatus`] du tour n'est connu qu'à la fin
 /// du flux (`ModelStreamEvent::Completed`/`Failed`).
 async fn run_turns(
-    agent_id: AgentId,
+    agent_id: AgentFrameId,
     model: Model,
     tools: &[ToolDefinition],
     mut context: Context,

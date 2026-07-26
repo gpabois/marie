@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{job::{JobId, JobState}, pubsub::PubSubMessage, worker::{JobResult, WorkerError}};
+use crate::{job::{JobId, JobState}, events::EventEnvelope, worker::{JobResult, WorkerError}};
 
 #[derive(Serialize, Deserialize)]
 pub enum WorkerEvent {
@@ -14,10 +14,10 @@ pub enum WorkerEvent {
     }
 }
 
-impl TryFrom<PubSubMessage> for WorkerEvent {
+impl TryFrom<EventEnvelope> for WorkerEvent {
     type Error = WorkerError;
 
-    fn try_from(value: PubSubMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: EventEnvelope) -> Result<Self, Self::Error> {
         use WorkerError::NotWorkerEvent;
 
         if !Self::is(&value) { return Err(NotWorkerEvent) };
@@ -27,7 +27,7 @@ impl TryFrom<PubSubMessage> for WorkerEvent {
 }
 
 impl WorkerEvent {
-    pub fn is(msg:& PubSubMessage) -> bool {
+    pub fn is(msg:& EventEnvelope) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }
 }

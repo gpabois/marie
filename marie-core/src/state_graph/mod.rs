@@ -193,7 +193,7 @@ pub enum StateGraphError {
     #[error("nœud agent/sous-graphe/orchestration rencontré sans GraphRuntime fourni")]
     MissingGraphRuntime,
     #[error("échec d'exécution : {0}")]
-    ExecutionFailed(#[from] anyhow::Error),
+    ExecutionFailed(#[from] crate::Error),
 }
 
 /// Identifiant d'un [`Cursor`] — un simple compteur local au
@@ -855,7 +855,7 @@ mod tests {
         ];
         let mut graph = StateGraph::new(nodes, vec![], "start").unwrap();
         let registry = RustRegistry::new();
-        registry.register_node("boom", |_: Value| async move { Err(anyhow::anyhow!("échec simulé")) });
+        registry.register_node("boom", |_: Value| async move { Err(crate::err!("échec simulé")) });
 
         let cursor_id = graph.cursors[0].id;
         let outcome = graph.execute_cursor(cursor_id, &registry, None, session_id()).await.unwrap();
@@ -869,7 +869,7 @@ mod tests {
         let nodes = vec![Node::new("start", Some(Executable::Rust { id: "boom".to_string() }))];
         let mut graph = StateGraph::new(nodes, vec![], "start").unwrap();
         let registry = RustRegistry::new();
-        registry.register_node("boom", |_: Value| async move { Err(anyhow::anyhow!("échec simulé")) });
+        registry.register_node("boom", |_: Value| async move { Err(crate::err!("échec simulé")) });
 
         let cursor_id = graph.cursors[0].id;
         let result = graph.execute_cursor(cursor_id, &registry, None, session_id()).await;

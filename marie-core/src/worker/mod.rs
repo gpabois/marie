@@ -6,7 +6,7 @@ use crate::{
     layer::{IntoService as _, LayerExt as _},
     network::{swarm::SwarmNetwork},
     worker::layers::WorkerEventLayer,
-    pubsub::{PubSubMessage, layers::PubSubLayer},
+    events::{EventEnvelope, layers::EventLayer},
     rpc::RpcError,
 };
 
@@ -64,8 +64,6 @@ pub enum JobResult {
     Success(serde_json::Value),
     Failed(String)
 }
-
-pub struct JobContext {}
 
 #[cfg(feature = "worker")]
 #[derive(TypedBuilder)]

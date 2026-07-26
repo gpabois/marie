@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use anyhow::{anyhow, bail};
+use crate::{err, bail};
 use futures::{FutureExt, SinkExt as _, StreamExt as _, TryFutureExt as _, channel::mpsc::{self, UnboundedSender}};
 use libp2p::rendezvous::Namespace;
 use serde_json::{Value, json};
@@ -9,7 +9,7 @@ use tracing::error;
 use typed_builder::TypedBuilder;
 
 use crate::{
-    agent::{AgentId, context::ContextEntry, frame::AgentFrame, role::Role, status::{AgentResponse, AgentStatus, YieldStatus}}, hitl::{Answer, Question}, layer::Layer, network::{bootstrap::BootstrapClient, worker::client::WorkerClient}, rpc::{RemoteProcedureCall, RpcServer}, session::{
+    agent::{AgentFrameId, context::ContextEntry, frame::AgentFrame, role::Role, status::{AgentResponse, AgentStatus, YieldStatus}}, hitl::{Answer, Question}, layer::Layer, network::{bootstrap::BootstrapClient, worker::client::WorkerClient}, rpc::{RemoteProcedureCall, RpcServer}, session::{
         NS_SESSION, Session, SessionEvent, SessionId, SessionLog, SessionLogId, rpc::{AppendLog, GetSession, InsertInLog, InsertSession, ListSession, PatchVars, PushGraph, PushHitl, PushOrchestration, QueryState, RemoveSession, RemoveVars, ReportAgentRun, ReportGraphDispatch, ReportGraphRun, ReportToolDispatch, ReportToolExecution, ReportUserInput, UpdateGraphStep, UpdateSession}, store::{SessionStore, SessionStoreClient}, worker::RunAgent,
     }, sink::SinkBoxExt as _, state::{StateAccess, StateLocation}, tools::{ToolCallId, ToolCallResult}, worker::WorkerServer,
 };
@@ -50,19 +50,19 @@ pub(crate) enum Resumed {
 /// plutôt qu'une mutation directe comme le fait encore
 /// [`crate::model::server::ModelServer`].
 pub(crate) enum SessionCommand {
-    Insert { session: Session, reply: oneshot::Sender<anyhow::Result<()>> },
-    Replace { session: Session, reply: oneshot::Sender<anyhow::Result<()>> },
-    Remove { id: SessionId, reply: oneshot::Sender<anyhow::Result<()>> },
-    ReportAgentRun { agent_id: AgentId, response: AgentResponse, reply: oneshot::Sender<anyhow::Result<()>> },
-    ReportToolDispatch { agent_id: AgentId, tools_calls: Vec<ToolCallId>, reply: oneshot::Sender<Result<(), String>> },
-    ReportToolExecution { agent_id: AgentId, tool_call_id: ToolCallId, result: ToolCallResult, reply: oneshot::Sender<Result<(), String>> },
+    Insert { session: Session, reply: oneshot::Sender<crate::Result<()>> },
+    Replace { session: Session, reply: oneshot::Sender<crate::Result<()>> },
+    Remove { id: SessionId, reply: oneshot::Sender<crate::Result<()>> },
+    ReportAgentRun { agent_id: AgentFrameId, response: AgentResponse, reply: oneshot::Sender<crate::Result<()>> },
+    ReportToolDispatch { agent_id: AgentFrameId, tools_calls: Vec<ToolCallId>, reply: oneshot::Sender<Result<(), String>> },
+    ReportToolExecution { agent_id: AgentFrameId, tool_call_id: ToolCallId, result: ToolCallResult, reply: oneshot::Sender<Result<(), String>> },
     AppendLog { session_id: SessionId, line: String, reply: oneshot::Sender<Result<(), String>> },
     InsertInLog { session_id: SessionId, log_id: SessionLogId, text: String, reply: oneshot::Sender<Result<(), String>> },
     PatchVars { session_id: SessionId, path: String, value: Value, reply: oneshot::Sender<Result<(), String>> },
     RemoveVars { session_id: SessionId, path: String, reply: oneshot::Sender<Result<(), String>> },
     /// Pousse un nouveau [`GraphFrame`] et fait passer `agent_id` en
     /// [`YieldStatus::WaitingGraph`] — voir [`push_graph`].
-    PushGraph { agent_id: AgentId, graph_id: GraphFrameId, graph: StateGraph, reply: oneshot::Sender<Result<(), String>> },
+    PushGraph { agent_id: AgentFrameId, graph_id: GraphFrameId, graph: StateGraph, reply: oneshot::Sender<Result<(), String>> },
     /// Persiste la progression d'un [`GraphFrame`] après un pas qui n'a ni
     /// conclu ni yieldé (avancée normale, fork, join, entrée en sous-graphe)
     /// — voir [`update_graph_step`].
@@ -278,7 +278,7 @@ impl SessionServerActor {
         session: Session, 
         store: SessionStoreClient, 
         event_tx: SessionServerEventEmitter,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), crate::Error> {
         let id = session.id;
         store.insert(session).await?;
         let _ = event_tx.unbounded_send(SessionEvent::Created { id });
@@ -289,7 +289,7 @@ impl SessionServerActor {
         session: Session, 
         store: SessionStoreClient, 
         event_tx: SessionServerEventEmitter,
-    ) -> Result<(), anyhow::Error> { 
+    ) -> Result<(), crate::Error> { 
         let id = session.id;
         store.replace(session).await?;
         let _ = event_tx.unbounded_send(SessionEvent::Updated { id });
@@ -300,20 +300,20 @@ impl SessionServerActor {
         id: SessionId,
         store: SessionStoreClient, 
         event_tx: SessionServerEventEmitter,
-    ) -> Result<(), anyhow::Error> {
+    ) -> Result<(), crate::Error> {
         store.delete(id).await?;
         let _ = event_tx.unbounded_send(SessionEvent::Removed { id });
         Ok(())
     }
 
     async fn report_agent_run(
-        agent_id: AgentId,
+        agent_id: AgentFrameId,
         response: AgentResponse,
         store: SessionStoreClient,
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
-        reply: oneshot::Sender<anyhow::Result<()>>
-    ) -> anyhow::Result<()> {
+        reply: oneshot::Sender<crate::Result<()>>
+    ) -> crate::Result<()> {
         use SessionEvent::FrameStatusChanged;
         match report_agent_run(store.clone(), agent_id, response).await {
             Ok((status, resumed)) => {
@@ -330,12 +330,12 @@ impl SessionServerActor {
     }
 
     async fn report_tool_dispatch(
-        agent_id: AgentId,
+        agent_id: AgentFrameId,
         tools_calls: Vec<ToolCallId>,
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = agent_id.session_id();
         match report_tool_dispatch(store, agent_id, tools_calls).await {
             Ok(status) => {
@@ -351,14 +351,14 @@ impl SessionServerActor {
     }
 
     async fn report_tool_execution(
-        agent_id: AgentId,
+        agent_id: AgentFrameId,
         tool_call_id: ToolCallId,
         result: ToolCallResult,
         store: SessionStoreClient,
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = agent_id.session_id();
         match report_tool_execution(store, agent_id, tool_call_id, result).await {
             Ok((status, resumed)) => {
@@ -392,7 +392,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match append_log(store, session_id, line.clone()).await {
             Ok(log_id) => {
                 let _ = event_tx.unbounded_send(SessionEvent::LogAppended { session_id, log_id, text: line });
@@ -413,7 +413,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match insert_in_log(store, session_id, log_id, text.clone()).await {
             Ok(()) => {
                 let _ = event_tx.unbounded_send(SessionEvent::LogAppended { session_id, log_id, text });
@@ -434,7 +434,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match patch_vars(store, session_id, &path, value).await {
             Ok(()) => {
                 let _ = event_tx.unbounded_send(SessionEvent::VarsPatched { session_id });
@@ -454,7 +454,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match remove_vars(store, session_id, &path).await {
             Ok(()) => {
                 let _ = event_tx.unbounded_send(SessionEvent::VarsPatched { session_id });
@@ -469,13 +469,13 @@ impl SessionServerActor {
     }
 
     async fn push_graph(
-        agent_id: AgentId,
+        agent_id: AgentFrameId,
         graph_id: GraphFrameId,
         graph: StateGraph,
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = agent_id.session_id();
         match push_graph(store, agent_id, graph_id, graph).await {
             Ok(status) => {
@@ -497,7 +497,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = graph_id.session_id();
         let status = graph.status();
         let current_node = graph.top().graph.ready_cursor().map(|cursor| cursor.current.clone());
@@ -522,7 +522,7 @@ impl SessionServerActor {
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = graph_id.session_id();
         let status = graph.status();
         match report_graph_dispatch(store, graph_id, graph, spawn_agent.clone()).await {
@@ -548,7 +548,7 @@ impl SessionServerActor {
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = graph_id.session_id();
         match report_graph_run(store, graph_id, response).await {
             Ok((status, resumed)) => {
@@ -574,7 +574,7 @@ impl SessionServerActor {
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = orchestration_id.session_id();
         match push_orchestration(store, orchestration_id, owner, owner_graph_update, strategy, children).await {
             Ok((spawned, pending)) => {
@@ -603,7 +603,7 @@ impl SessionServerActor {
         store: SessionStoreClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<(), String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         let session_id = hitl_id.session_id();
         match push_hitl(store, hitl_id, owner, questions, owner_graph_update).await {
             Ok(status) => {
@@ -634,7 +634,7 @@ impl SessionServerActor {
         worker: WorkerClient,
         event_tx: SessionServerEventEmitter,
         reply: oneshot::Sender<Result<HitlFrameId, String>>,
-    ) -> anyhow::Result<()> {
+    ) -> crate::Result<()> {
         match report_user_input(store, session_id, hitl_id, answers).await {
             Ok((hitl_id, hitl_status, resumed)) => {
                 let _ = event_tx.unbounded_send(SessionEvent::HitlStatusChanged { session_id, hitl_id, status: hitl_status });
@@ -693,13 +693,13 @@ pub struct SessionServer {
 /// mutent une session existante plutôt que d'en créer une (contrairement à
 /// [`crate::session::rpc::InsertSession`], leur appelant est censé savoir
 /// que la session existe déjà).
-pub(crate) async fn get_session(store: SessionStoreClient, session_id: SessionId) -> Result<Session, anyhow::Error> 
+pub(crate) async fn get_session(store: SessionStoreClient, session_id: SessionId) -> Result<Session, crate::Error> 
 {
     store
         .clone()
         .get(session_id)
         .await?
-        .ok_or_else(|| anyhow!("session inconnue : {session_id}"))
+        .ok_or_else(|| err!("session inconnue : {session_id}"))
 }
 
 /// Met à jour le [`AgentFrame`] de `agent_id` au vu de l'issue rapportée par
@@ -719,14 +719,14 @@ pub(crate) async fn get_session(store: SessionStoreClient, session_id: SessionId
 /// débloqué (à resoumettre comme nouveau Job — voir [`spawn_resumed`]).
 pub(crate) async fn report_agent_run(
     store: SessionStoreClient,
-    agent_id: AgentId,
+    agent_id: AgentFrameId,
     response: AgentResponse,
-) -> Result<(AgentStatus, Vec<Resumed>), anyhow::Error> {
+) -> Result<(AgentStatus, Vec<Resumed>), crate::Error> {
     let mut session = get_session(store.clone(), agent_id.session_id()).await?;
 
     let status = {
         let Some(frame) = session.frames.get_mut(&agent_id) else {
-            return Err(anyhow!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
+            return Err(err!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
         };
 
         apply_agent_response(frame, response.clone());
@@ -804,7 +804,7 @@ pub(crate) async fn report_agent_run(
 /// (voir la sémantique "tous les enfants" de [`YieldStatus::WaitingAgents`]) :
 /// il compte comme terminé, à charge pour le parent d'en tenir compte à sa
 /// reprise.
-fn push_child_result_into_context(frame: &mut AgentFrame, child_id: AgentId, response: &AgentResponse) {
+fn push_child_result_into_context(frame: &mut AgentFrame, child_id: AgentFrameId, response: &AgentResponse) {
     let content = match response {
         AgentResponse::Finished { text } => text.clone().unwrap_or_default(),
         AgentResponse::Failed { error } => format!("erreur : {error}"),
@@ -916,15 +916,15 @@ fn resolve_orchestration_owner(session: &mut Session, orchestration_id: Orchestr
 /// statut n'existe, et rester bloqué indéfiniment dans `tools_calls`).
 pub(crate) async fn report_tool_dispatch(
     store: SessionStoreClient,
-    agent_id: AgentId,
+    agent_id: AgentFrameId,
     tools_calls: Vec<ToolCallId>,
-) -> Result<AgentStatus, anyhow::Error> 
+) -> Result<AgentStatus, crate::Error> 
 {
     let mut session = get_session(store.clone(), agent_id.session_id()).await?;
 
     let status = {
         let Some(frame) = session.frames.get_mut(&agent_id) else {
-            return Err(anyhow!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
+            return Err(err!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
         };
 
         frame.status = AgentStatus::Yielding(YieldStatus::WaitingToolReply { tools_calls, tools_outputs: std::collections::HashMap::new() });
@@ -955,15 +955,15 @@ pub(crate) async fn report_tool_dispatch(
 /// le worker qui l'exécute.
 pub(crate) async fn report_tool_execution(
     store: SessionStoreClient,
-    agent_id: AgentId,
+    agent_id: AgentFrameId,
     tool_call_id: ToolCallId,
     result: ToolCallResult,
-) -> Result<(AgentStatus, Option<AgentFrame>), anyhow::Error> 
+) -> Result<(AgentStatus, Option<AgentFrame>), crate::Error> 
 {
     let mut session = get_session(store.clone(), agent_id.session_id()).await?;
 
     let Some(frame) = session.frames.get_mut(&agent_id) else {
-        return Err(anyhow!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
+        return Err(err!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
     };
 
     let current_status = frame.status.clone();
@@ -1008,7 +1008,7 @@ pub(crate) async fn append_log(
     store: SessionStoreClient, 
     session_id: SessionId, 
     line: String
-) -> Result<SessionLogId, anyhow::Error> {
+) -> Result<SessionLogId, crate::Error> {
     let mut session = get_session(store.clone(), session_id).await?;
     let log_id = SessionLogId::new(crate::id::generate_id());
     session.logs.push(SessionLog { id: log_id, content: line });
@@ -1025,7 +1025,7 @@ pub(crate) async fn insert_in_log(
     session_id: SessionId, 
     log_id: SessionLogId, 
     text: String
-) -> Result<(), anyhow::Error> {
+) -> Result<(), crate::Error> {
     let mut session = get_session(store.clone(), session_id).await?;
     match session.logs.iter_mut().find(|log| log.id == log_id) {
         Some(log) => log.content.push_str(&text),
@@ -1042,7 +1042,7 @@ pub(crate) async fn query_state(
     sessions: SessionStoreClient, 
     location: StateLocation, 
     path: &str
-) -> Result<Vec<Value>, anyhow::Error> {
+) -> Result<Vec<Value>, crate::Error> {
     match location {
         StateLocation::InSession(session_id) => {
             let session = get_session(sessions, session_id).await?;
@@ -1068,7 +1068,7 @@ pub(crate) async fn patch_vars(
     session_id: SessionId, 
     path: &str, 
     value: Value
-) -> Result<(), anyhow::Error> {
+) -> Result<(), crate::Error> {
     let mut session = get_session(store.clone(), session_id).await?;
     let doc = serde_json::to_value(&session.vars)?;
     let patched = jsonpath_lib::replace_with(doc, path, &mut |_| Some(value.clone()))?;
@@ -1085,7 +1085,7 @@ pub(crate) async fn remove_vars(
     store: SessionStoreClient,
     session_id: SessionId,
     path: &str,
-) -> anyhow::Result<()> {
+) -> crate::Result<()> {
     let mut session = get_session(store.clone(), session_id).await?;
     let doc = serde_json::to_value(&session.vars)?;
     let patched = jsonpath_lib::delete(doc, path)?;
@@ -1103,15 +1103,15 @@ pub(crate) async fn remove_vars(
 /// programmatique pour démarrer un graphe sur une session.
 pub(crate) async fn push_graph(
     store: SessionStoreClient, 
-    agent_id: AgentId, 
+    agent_id: AgentFrameId, 
     graph_id: GraphFrameId, 
     graph: StateGraph
-) -> Result<AgentStatus, anyhow::Error> {
+) -> Result<AgentStatus, crate::Error> {
     let mut session = get_session(store.clone(), agent_id.session_id()).await?;
 
     let status = {
         let Some(frame) = session.frames.get_mut(&agent_id) else {
-            return Err(anyhow!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
+            return Err(err!("frame {agent_id:?} inconnu de la session {}", agent_id.session_id()));
         };
 
         frame.status = AgentStatus::Yielding(YieldStatus::WaitingGraph { graph: graph_id });
@@ -1136,11 +1136,11 @@ pub(crate) async fn update_graph_step(
     store: SessionStoreClient, 
     graph_id: GraphFrameId, 
     graph: GraphFrame
-) -> Result<(), anyhow::Error> {
+) -> Result<(), crate::Error> {
     let mut session = get_session(store.clone(), graph_id.session_id()).await?;
 
     if !session.graphs.contains_key(&graph_id) {
-        return Err(anyhow!("graphe {graph_id} inconnu de la session {}", graph_id.session_id()));
+        return Err(err!("graphe {graph_id} inconnu de la session {}", graph_id.session_id()));
     }
 
     session.graphs.insert(graph_id, graph);
@@ -1161,7 +1161,7 @@ pub(crate) async fn report_graph_dispatch(
     graph_id: GraphFrameId, 
     graph: GraphFrame, 
     spawn_agent: AgentFrame
-) -> Result<(), anyhow::Error> {
+) -> Result<(), crate::Error> {
     let mut session = get_session(store.clone(), graph_id.session_id()).await?;
     session.graphs.insert(graph_id, graph);
     session.frames.insert(spawn_agent.id, spawn_agent);
@@ -1178,12 +1178,12 @@ pub(crate) async fn report_graph_run(
     store: SessionStoreClient, 
     graph_id: GraphFrameId,
     response: GraphResponse
-) -> Result<(AgentStatus, Vec<Resumed>), anyhow::Error> {
+) -> Result<(AgentStatus, Vec<Resumed>), crate::Error> {
     let mut session = get_session(store.clone(), graph_id.session_id()).await?;
 
     let status = {
         let Some(graph) = session.graphs.get_mut(&graph_id) else {
-            return Err(anyhow!("graphe {graph_id} inconnu de la session {}", graph_id.session_id()));
+            return Err(err!("graphe {graph_id} inconnu de la session {}", graph_id.session_id()));
         };
 
         if let GraphResponse::Failed { error } = &response {
@@ -1240,7 +1240,7 @@ pub(crate) async fn push_orchestration(
     owner_graph_update: Option<GraphFrame>,
     strategy: OrchestrationStrategy,
     children: Vec<ResolvedChildTask>,
-) -> Result<(Vec<Resumed>, usize), anyhow::Error> {
+) -> Result<(Vec<Resumed>, usize), crate::Error> {
     let session_id = orchestration_id.session_id();
     let mut session = get_session(store.clone(), session_id).await?;
 
@@ -1334,21 +1334,21 @@ pub(crate) async fn push_hitl(
     owner: Waiter,
     questions: Vec<Question>,
     owner_graph_update: Option<GraphFrame>,
-) -> Result<AgentStatus, anyhow::Error> {
+) -> Result<AgentStatus, crate::Error> {
     let session_id = hitl_id.session_id();
     let mut session = get_session(store.clone(), session_id).await?;
 
     let status = match owner {
         Waiter::Agent(agent_id) => {
             let Some(frame) = session.frames.get_mut(&agent_id) else {
-                return Err(anyhow!("frame {agent_id:?} inconnu de la session {session_id}"));
+                return Err(err!("frame {agent_id:?} inconnu de la session {session_id}"));
             };
 
             frame.status = AgentStatus::Yielding(YieldStatus::WaitingHitl { hitl: hitl_id });
             frame.status.clone()
         }
         Waiter::Graph(graph_id) => {
-            let graph = owner_graph_update.ok_or_else(|| anyhow!("graphe {graph_id} : mise à jour du curseur manquante"))?;
+            let graph = owner_graph_update.ok_or_else(|| err!("graphe {graph_id} : mise à jour du curseur manquante"))?;
             let status = graph.status();
             session.graphs.insert(graph_id, graph);
             status
@@ -1383,7 +1383,7 @@ pub(crate) async fn report_user_input(
     session_id: SessionId,
     hitl_id: Option<HitlFrameId>,
     answers: HashMap<String, Answer>,
-) -> Result<(HitlFrameId, HitlFrameStatus, Option<Resumed>), anyhow::Error> {
+) -> Result<(HitlFrameId, HitlFrameStatus, Option<Resumed>), crate::Error> {
     use AgentStatus::Yielding;
     use YieldStatus::WaitingHitl;
 
@@ -1395,10 +1395,10 @@ pub(crate) async fn report_user_input(
             let mut matches = session.frames.iter_waiting_hitl();
 
             let Some(only) = matches.next() else {
-                return Err(anyhow!("aucun agent en attente d'une réponse humaine dans cette session"));
+                return Err(err!("aucun agent en attente d'une réponse humaine dans cette session"));
             };
             if matches.next().is_some() {
-                return Err(anyhow!("plusieurs agents en attente d'une réponse humaine : précisez hitl_id"));
+                return Err(err!("plusieurs agents en attente d'une réponse humaine : précisez hitl_id"));
             }
 
             let Yielding(WaitingHitl { hitl }) = &only.status else {
@@ -1409,7 +1409,7 @@ pub(crate) async fn report_user_input(
     };
 
     let Some(hitl) = session.hitls.get_mut(&hitl_id) else {
-        return Err(anyhow!("formulaire {hitl_id} inconnu de la session {session_id}"));
+        return Err(err!("formulaire {hitl_id} inconnu de la session {session_id}"));
     };
 
     if let HitlFrameStatus::Answered { .. } = &hitl.status {
@@ -1423,7 +1423,7 @@ pub(crate) async fn report_user_input(
     let resumed = match owner {
         Waiter::Agent(agent_id) => {
             let Some(frame) = session.frames.get_mut(&agent_id) else {
-                return Err(anyhow!("frame {agent_id:?} inconnu de la session {session_id}"));
+                return Err(err!("frame {agent_id:?} inconnu de la session {session_id}"));
             };
 
             frame.context.push(ContextEntry { role: Role::Tool, content: format!("[hitl {hitl_id}] {}", hitl_answers_to_value(&answers)) });
@@ -1432,12 +1432,12 @@ pub(crate) async fn report_user_input(
         }
         Waiter::Graph(graph_id) => {
             let Some(graph) = session.graphs.get_mut(&graph_id) else {
-                return Err(anyhow!("graphe {graph_id} inconnu de la session {session_id}"));
+                return Err(err!("graphe {graph_id} inconnu de la session {session_id}"));
             };
 
             let Some(cursor) = graph.top_mut().graph.cursors.iter_mut().find(|cursor| matches!(&cursor.status, AgentStatus::Yielding(YieldStatus::WaitingHitl { hitl }) if *hitl == hitl_id))
             else {
-                return Err(anyhow!("aucun curseur du graphe {graph_id} n'attend le formulaire {hitl_id}"));
+                return Err(err!("aucun curseur du graphe {graph_id} n'attend le formulaire {hitl_id}"));
             };
 
             cursor.last_output = hitl_answers_to_value(&answers);

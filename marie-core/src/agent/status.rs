@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use crate::{agent::AgentId, state_graph::{frame::GraphFrameId, hitl::HitlFrameId, orchestration::OrchestrationFrameId}, tools::ToolCallId};
+use crate::{agent::AgentFrameId, state_graph::{frame::GraphFrameId, hitl::HitlFrameId, orchestration::OrchestrationFrameId}, tools::ToolCallId};
 
 
 #[derive(Debug, Default, Clone, Eq, PartialEq, Serialize, Deserialize)]
@@ -49,7 +49,7 @@ pub enum YieldStatus {
     /// les résultats groupés pour reprendre en une fois), ici chaque
     /// résultat est consommé immédiatement à son arrivée.
     WaitingAgents {
-        agents: Vec<AgentId>,
+        agents: Vec<AgentFrameId>,
     },
     /// En attente qu'un [`GraphFrame`](crate::state_graph::frame::GraphFrame)
     /// poussé par cet agent (voir `system/push-mode`) conclue — voir

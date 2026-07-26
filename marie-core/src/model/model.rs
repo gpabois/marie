@@ -3,6 +3,7 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
+use crate::secret::store::SecretRef;
 use crate::secret::{Encryptable, EncryptedSecret, SecretCodec, SecretResult};
 
 /// Identifiant unique d'un modèle dans le [`ModelCatalog`](crate::model::catalog::ModelCatalog).
@@ -115,7 +116,7 @@ pub enum EncryptedModel {
         id: String,
         base_url: String,
         client_id: String,
-        api_key: EncryptedSecret,
+        api_key: SecretRef,
         model: String,
         system_prompt: Option<String>,
     },

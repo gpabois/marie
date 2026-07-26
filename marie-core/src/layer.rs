@@ -2,19 +2,19 @@ use futures::{Sink, Stream, StreamExt, stream::BoxStream};
 
 use crate::sink::{BoxSink, SinkBoxExt};
 
-pub struct BoxLayer<S, R, E=anyhow::Error>(BoxSink<'static, S, E>, BoxStream<'static, R>);
+pub struct BoxLayer<S, R, E=crate::Error>(BoxSink<'static, S, E>, BoxStream<'static, R>);
 
 impl<S, R, E> BoxLayer<S, R, E> {
     pub fn new(
-        tx: impl Sink<S, Error=E> + Sync + Send + 'static,
-        rx: impl Stream<Item=R> + Sync + Send + 'static
+        tx: impl Sink<S, Error=E> + Send + 'static,
+        rx: impl Stream<Item=R> + Send + 'static
     ) -> Self {
         Self(tx.boxed_sink(), rx.boxed())
     }
 }
 
 impl<S, R, E> Layer<E> for BoxLayer<S, R, E> 
-    where S: 'static, R: 'static, E: 'static
+    where S: Send  + 'static, R: Send  +'static, E: 'static
 {
     type Send = S;
     type Received = R;
@@ -27,13 +27,18 @@ impl<S, R, E> Layer<E> for BoxLayer<S, R, E>
     }
 }
 
-pub trait Layer<Error=anyhow::Error>: Sized {
+pub trait Layer<Error=crate::Error>: Sized {
     type Send;
     type Received;
     type Sender: Sink<Self::Send, Error=Error> + Send + 'static;
-    type Receiver: Stream<Item=Self::Received> + Send  + 'static;
+    type Receiver: Stream<Item=Self::Received> + Send + 'static;
 
     fn split(self) -> (Self::Sender, Self::Receiver);
+
+    fn boxed(self) -> BoxLayer<Self::Send, Self::Received, Error> {
+        let (tx, rx) = self.split();
+        BoxLayer::new(tx, rx)
+    }
 
     fn boxed_split(self) -> (BoxSink<'static, Self::Send, Error>, BoxStream<'static, Self::Received>) {
         let (tx, rx) = self.split();

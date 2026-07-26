@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    agent::{AgentId, status::AgentStatus},
+    agent::{AgentFrameId, status::AgentStatus},
     id::ID,
     session::SessionId,
     state_graph::{StateGraph, orchestration::OrchestrationFrameId},
@@ -43,10 +43,10 @@ impl std::fmt::Display for GraphFrameId {
 }
 
 impl std::str::FromStr for GraphFrameId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format de GraphFrameId invalide : {s}"))?;
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format de GraphFrameId invalide : {s}"))?;
         Ok(Self(session_part.parse()?, local_part.parse()?))
     }
 }
@@ -76,7 +76,7 @@ impl<'de> Deserialize<'de> for GraphFrameId {
 /// chaîne de propriété n'a pas été remontée jusqu'à un agent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum GraphOwner {
-    Agent(AgentId),
+    Agent(AgentFrameId),
     Orchestration(OrchestrationFrameId),
 }
 

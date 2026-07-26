@@ -22,25 +22,25 @@ pub mod role;
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
 #[repr(C)]
-pub struct AgentId(SessionId, ID);
+pub struct AgentFrameId(SessionId, ID);
 
-impl AsRef<[u8]> for AgentId {
+impl AsRef<[u8]> for AgentFrameId {
     fn as_ref(&self) -> &[u8] {
         bytemuck::bytes_of(self)
     }
 }
 
-impl std::fmt::Display for AgentId {
+impl std::fmt::Display for AgentFrameId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}/{}", self.0, self.1)
     }
 }
 
-impl std::str::FromStr for AgentId {
-    type Err = anyhow::Error;
+impl std::str::FromStr for AgentFrameId {
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format d'AgentId invalide : {s}"))?;
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format d'AgentId invalide : {s}"))?;
         Ok(Self(session_part.parse()?, local_part.parse()?))
     }
 }
@@ -51,20 +51,20 @@ impl std::str::FromStr for AgentId {
 /// clé de `HashMap` dans une structure sérialisée en JSON (voir
 /// `Session::frames`, `serde_json` n'accepte que des clés de type chaîne
 /// pour un objet), sur le même modèle que [`ID`](crate::id::ID) lui-même.
-impl Serialize for AgentId {
+impl Serialize for AgentFrameId {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.serialize_str(&self.to_string())
     }
 }
 
-impl<'de> Deserialize<'de> for AgentId {
+impl<'de> Deserialize<'de> for AgentFrameId {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let repr = String::deserialize(deserializer)?;
         repr.parse().map_err(serde::de::Error::custom)
     }
 }
 
-impl AgentId {
+impl AgentFrameId {
     pub fn new(session_id: SessionId, id: ID) -> Self {
         Self(session_id, id)
     }
@@ -79,7 +79,7 @@ impl AgentId {
 }
 
 pub struct Agent {
-    id: AgentId,
+    id: AgentFrameId,
     status: AgentStatus,
     context: Context,
     kind: AgentKind
@@ -103,7 +103,7 @@ pub enum AgentError {
 }
 
 pub enum Yielding {
-    YieldingAgents(Vec<AgentId>),
+    YieldingAgents(Vec<AgentFrameId>),
     YieldingHitl(HitlFrameId)
 }
 
@@ -187,7 +187,7 @@ pub async fn run(
     tools: &ToolClient,
     hitl: &HitlClient,
     sessions: &SessionClient,
-) -> Result<RunOutcome, anyhow::Error> {
+) -> Result<RunOutcome, crate::Error> {
     let agent_id = GlobalAgentId::new(frame.session_id, frame.id);
     let declaration = model.get(frame.model_id.clone()).await?;
 
@@ -247,8 +247,8 @@ struct AskHumanArgs {
     questions: Vec<Question>,
 }
 
-fn parse_ask_human_questions(call: &ToolCall) -> Result<Vec<Question>, anyhow::Error> {
-    let params = call.parameters.clone().ok_or_else(|| anyhow::anyhow!("appel de {ASK_HUMAN_TOOL} sans arguments"))?;
+fn parse_ask_human_questions(call: &ToolCall) -> Result<Vec<Question>, crate::Error> {
+    let params = call.parameters.clone().ok_or_else(|| crate::err!("appel de {ASK_HUMAN_TOOL} sans arguments"))?;
     let args: AskHumanArgs = serde_json::from_value(params)?;
     Ok(args.questions)
 }
@@ -257,7 +257,7 @@ fn parse_ask_human_questions(call: &ToolCall) -> Result<Vec<Question>, anyhow::E
 /// (voir [`SessionClient::push_context_entry`]) avant de mettre à jour la
 /// copie locale — pour qu'un échec réseau n'avance jamais la copie locale
 /// sans que la persistance ait réussi.
-async fn push_context(frame: &mut AgentFrame, sessions: &SessionClient, entry: ContextEntry) -> Result<(), anyhow::Error> {
+async fn push_context(frame: &mut AgentFrame, sessions: &SessionClient, entry: ContextEntry) -> Result<(), crate::Error> {
     sessions.push_context_entry(frame.session_id, frame.id, entry.clone()).await?;
     frame.context.push(entry);
     Ok(())
@@ -265,7 +265,7 @@ async fn push_context(frame: &mut AgentFrame, sessions: &SessionClient, entry: C
 
 /// Persiste le nouveau statut de `frame` (voir [`SessionClient::set_frame_status`])
 /// avant de mettre à jour la copie locale, même ordre que [`push_context`].
-async fn set_status(frame: &mut AgentFrame, sessions: &SessionClient, status: AgentStatus) -> Result<(), anyhow::Error> {
+async fn set_status(frame: &mut AgentFrame, sessions: &SessionClient, status: AgentStatus) -> Result<(), crate::Error> {
     sessions.set_frame_status(frame.session_id, frame.id, status.clone()).await?;
     frame.status = status;
     Ok(())

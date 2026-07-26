@@ -7,12 +7,12 @@ use tokio::{select, sync::mpsc};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    annuary::Annuary, job::{JobId, JobInstance, JobState}, layer::Layer, network::bootstrap::{BootstrapClient, client::PeerSelection}, rpc::{RpcClient, RpcServer, Void, client::RpcCallArgs}, sink::{BoxSink, SinkBoxExt}
+    _annuary::Annuary, job::{JobId, JobInstance, JobState}, layer::Layer, network::bootstrap::{BootstrapClient, client::PeerSelection}, rpc::{RpcClient, RpcServer, Void, client::RpcCallArgs}, sink::{BoxSink, SinkBoxExt}
 };
 
 use super::{JobResult, NS_WORKER, NS_WORKER_WATCHDOG, RPC_GET_STATE_JOB, RPC_SCHEDULE_JOB, RPC_WATCH_JOB, WorkerError, WorkerEvent};
 
-type WorkEventEmitter = BoxSink<'static, WorkerEvent, anyhow::Error>;
+type WorkEventEmitter = BoxSink<'static, WorkerEvent, crate::Error>;
 type JobTrackers = Arc<Mutex<HashMap<JobId, JobTrackerInfo>>>;
 type CommandEmitter = mpsc::UnboundedSender<Command>;
 

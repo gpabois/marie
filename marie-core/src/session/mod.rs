@@ -20,10 +20,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::agent::AgentId;
+use crate::agent::AgentFrameId;
 use crate::agent::status::{AgentResponse, AgentStatus};
 use crate::hitl::{Answer, Question};
-use crate::pubsub::PubSubMessage;
+use crate::events::EventEnvelope;
 use crate::state::StateLocation;
 use crate::state_graph::{
     StateGraph,
@@ -59,23 +59,6 @@ pub enum SessionEvent {
     Created { id: SessionId },
     Updated { id: SessionId },
     Removed { id: SessionId },
-    FrameStatusChanged { session_id: SessionId, agent_id: AgentId, status: AgentStatus },
-    /// Progression d'un [`crate::state_graph::frame::GraphFrame`] —
-    /// `current_node` (le nœud du curseur prêt à avancer, s'il y en a un)
-    /// est inclus directement pour observer la progression du graphe sans
-    /// refaire un `GetSession` à chaque évènement.
-    GraphStatusChanged { session_id: SessionId, graph_id: GraphFrameId, status: AgentStatus, current_node: Option<String> },
-    /// Progression d'une [`crate::state_graph::orchestration::OrchestrationFrame`] —
-    /// `pending` : nombre d'enfants encore attendus.
-    OrchestrationStatusChanged { session_id: SessionId, orchestration_id: OrchestrationFrameId, status: AgentStatus, pending: usize },
-    /// Cycle de vie d'un [`crate::state_graph::hitl::HitlFrame`] — émis à
-    /// la fois par [`rpc::PushHitl`] (`status: Pending`) et
-    /// [`rpc::ReportUserInput`] (`status: Answered`), observable
-    /// indépendamment de l'`AgentFrame`/`GraphFrame` propriétaire (voir
-    /// [`crate::state_graph::hitl::HitlFrame::owner`]).
-    HitlStatusChanged { session_id: SessionId, hitl_id: HitlFrameId, status: HitlFrameStatus },
-    LogAppended { session_id: SessionId, log_id: SessionLogId, text: String },
-    VarsPatched { session_id: SessionId },
 }
 
 #[derive(Debug, Error)]
@@ -100,12 +83,6 @@ impl SessionEvent {
     pub fn session_id(&self) -> SessionId {
         match self {
             SessionEvent::Created { id } | SessionEvent::Updated { id } | SessionEvent::Removed { id } => *id,
-            SessionEvent::FrameStatusChanged { session_id, .. }
-            | SessionEvent::GraphStatusChanged { session_id, .. }
-            | SessionEvent::OrchestrationStatusChanged { session_id, .. }
-            | SessionEvent::HitlStatusChanged { session_id, .. }
-            | SessionEvent::LogAppended { session_id, .. }
-            | SessionEvent::VarsPatched { session_id } => *session_id,
         }
     }
 
@@ -116,12 +93,6 @@ impl SessionEvent {
             SessionEvent::Created { .. } => "created",
             SessionEvent::Updated { .. } => "updated",
             SessionEvent::Removed { .. } => "removed",
-            SessionEvent::FrameStatusChanged { .. } => "frame-status-changed",
-            SessionEvent::GraphStatusChanged { .. } => "graph-status-changed",
-            SessionEvent::OrchestrationStatusChanged { .. } => "orchestration-status-changed",
-            SessionEvent::HitlStatusChanged { .. } => "hitl-status-changed",
-            SessionEvent::LogAppended { .. } => "log-appended",
-            SessionEvent::VarsPatched { .. } => "vars-patched",
         }
     }
 
@@ -150,7 +121,7 @@ impl SessionEvent {
     /// Reconnaît tout topic de session, dédié ou global — voir
     /// [`Self::topic_prefix`]/[`Self::GLOBAL_TOPIC_PREFIX`] pour filtrer plus
     /// précisément.
-    pub fn is(msg: &PubSubMessage) -> bool {
+    pub fn is(msg: &EventEnvelope) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }
 
@@ -181,10 +152,10 @@ impl SessionEvent {
     }
 }
 
-impl TryFrom<PubSubMessage> for SessionEvent {
+impl TryFrom<EventEnvelope> for SessionEvent {
     type Error = SessionEventError;
 
-    fn try_from(value: PubSubMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: EventEnvelope) -> Result<Self, Self::Error> {
         use SessionEventError::NotSessionEvent;
 
         if !Self::is(&value) { return Err(NotSessionEvent) };
@@ -193,25 +164,10 @@ impl TryFrom<PubSubMessage> for SessionEvent {
     }
 }
 
-/// Construit un [`server::SessionServer`] en chaînant le transport réseau
-/// brut (`NetworkCommand`/`NetworkEvent`) à travers `PubSubLayer` puis
-/// [`layers::SessionEventLayer`] — mirroir de
-/// [`crate::network::worker::build_server`].
-#[cfg(feature = "catalog")]
-pub fn build_server(net: &crate::network::Network args: server::SessionServerArgs) -> server::SessionServer {
-    use crate::layer::{IntoService as _, LayerExt as _};
-    use crate::pubsub::layers::PubSubLayer;
-
-    net.transport()
-        .chain::<PubSubLayer, _>(())
-        .chain::<layers::SessionEventLayer, _>(())
-        .into_service(args)
-}
-
 /// Charge utile de [`rpc::ReportAgentRun`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReportAgentRunRequest {
-    pub agent_id: AgentId,
+    pub agent_id: AgentFrameId,
     pub response: AgentResponse,
 }
 
@@ -224,7 +180,7 @@ pub struct SessionReportAgentRunRequest {
 /// (l'agent resterait bloqué indéfiniment).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReportToolDispatchRequest {
-    pub agent_id: AgentId,
+    pub agent_id: AgentFrameId,
     pub tools_calls: Vec<ToolCallId>,
 }
 
@@ -233,7 +189,7 @@ pub struct SessionReportToolDispatchRequest {
 /// que [`SessionReportAgentRunRequest`] pour `RunAgent`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionReportToolExecutionRequest {
-    pub agent_id: AgentId,
+    pub agent_id: AgentFrameId,
     pub tool_call_id: ToolCallId,
     pub result: ToolCallResult,
 }
@@ -291,7 +247,7 @@ pub struct SessionVarsRemoveRequest {
 /// [`GraphFrame`] identifié par `graph_id` — voir [`server::push_graph`].
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionPushGraphRequest {
-    pub agent_id: AgentId,
+    pub agent_id: AgentFrameId,
     pub graph_id: GraphFrameId,
     pub graph: StateGraph,
 }

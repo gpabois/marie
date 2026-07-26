@@ -1,17 +1,17 @@
 use std::{collections::HashMap, sync::Arc};
 
-use anyhow::anyhow;
+use crate::err;
 use async_trait::async_trait;
 use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 
-use crate::{job::Job, worker::JobContext, session::{SessionId, client::SessionClient}, tools::{JOB_TOOL_EXECUTE, ToolCall, ToolCallError, ToolCallResult, ToolId}};
+use crate::{job::Job, session::{SessionId, client::SessionClient}, tools::{JOB_TOOL_EXECUTE, ToolCall, ToolCallError, ToolCallResult, ToolId}};
 
 #[cfg(feature = "worker")]
 use crate::worker::WorkerServer;
 
-type ToolExecutor = Arc<dyn Fn(SessionId, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, anyhow::Error>> + Send + Sync + 'static>;
+type ToolExecutor = Arc<dyn Fn(SessionId, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, crate::Error>> + Send + Sync + 'static>;
 
 #[cfg(feature = "worker")]
 #[derive(Default)]
@@ -22,13 +22,13 @@ impl ToolWorkerArgs {
     pub fn add<F, Args, R, Fut>(mut self, id: impl Into<ToolId>, executor: F) -> Self 
         where 
             F: Fn(SessionId, Args) -> Fut + Send + Sync + 'static,
-            Fut: Future<Output = Result<R, anyhow::Error>> + Send + Sync + 'static,
+            Fut: Future<Output = Result<R, crate::Error>> + Send + Sync + 'static,
             R: Serialize,
             Args: DeserializeOwned
     {
         let wrapped = move |session_id: SessionId, args: serde_json::Value| {
             let task = match serde_json::from_value(args) {
-                Err(error) => return std::future::ready(Err(anyhow!("échec lors de l'amorçage de l'exécution de l'outil: {error}"))).boxed(),
+                Err(error) => return std::future::ready(Err(err!("échec lors de l'amorçage de l'exécution de l'outil: {error}"))).boxed(),
                 Ok(args) => executor(session_id, args)
             };
 
@@ -36,12 +36,12 @@ impl ToolWorkerArgs {
                 let result = task.await;
 
                 if let Err(error) = &result {
-                    return Err(anyhow!("échec lors de l'exécution de l'outil: {error}"));
+                    return Err(err!("échec lors de l'exécution de l'outil: {error}"));
                 }
 
                 let result = serde_json::to_value(result.unwrap());
                 if let Err(error) = &result {
-                    return Err(anyhow!("échec lors de la serialization du retour de l'outil: {error}"));
+                    return Err(err!("échec lors de la serialization du retour de l'outil: {error}"));
                 }
 
                 Ok(result.unwrap())
@@ -62,7 +62,7 @@ impl ToolWorker {
         Self(Arc::new(Mutex::new(args.0)), sessions)
     }
 
-    pub fn register(&self, worker: &mut WorkerServer<JobContext>) {
+    pub fn register(&self, worker: &mut WorkerServer) {
         ToolExecution(self.0.clone(), self.1.clone()).register(worker);
     }
 }
@@ -85,12 +85,13 @@ impl Job for ToolExecution {
     type Args = ToolCall;
     type Return = serde_json::Value;
 
-    async fn execute(self, call: ToolCall, _cx: JobContext) -> Result<serde_json::Value, anyhow::Error> {
+    #[cfg(feature = "job-executor")]
+    async fn execute(self, call: ToolCall) -> Result<serde_json::Value, crate::Error> {
         let executor = self.0.lock().get(call.name.as_str()).cloned();
 
         let outcome = match executor {
             Some(executor) => executor(call.id.session_id(), call.parameters.clone()).await,
-            None => Err(anyhow!("aucun exécuteur d'outil trouvé pour {}", call.name)),
+            None => Err(err!("aucun exécuteur d'outil trouvé pour {}", call.name)),
         };
 
         let result = match &outcome {

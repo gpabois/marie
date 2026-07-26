@@ -28,7 +28,7 @@ pub struct StoredStateGraph {
 /// Reconstitue un [`StoredStateGraph`] depuis une ligne de la table
 /// `state_graph` (voir `migrations/0004_state_graph.sql`) — symétrique de
 /// l'insertion dans [`PgStore::insert`]/[`PgStore::replace`].
-fn decode_row(row: &PgRow) -> anyhow::Result<StoredStateGraph> {
+fn decode_row(row: &PgRow) -> crate::Result<StoredStateGraph> {
     Ok(StoredStateGraph {
         id: StateGraphId::new(row.try_get::<String, _>("id")?),
         declaration: StateGraphDeclaration {
@@ -46,17 +46,17 @@ fn decode_row(row: &PgRow) -> anyhow::Result<StoredStateGraph> {
 /// `insert`/`replace`).
 #[async_trait]
 pub trait StateGraphStore: Send + Sync + Clone {
-    async fn get(self, id: StateGraphId) -> anyhow::Result<Option<StoredStateGraph>>;
-    async fn insert(self, value: StoredStateGraph) -> anyhow::Result<()>;
-    async fn replace(self, value: StoredStateGraph) -> anyhow::Result<()>;
-    async fn delete(self, id: StateGraphId) -> anyhow::Result<()>;
+    async fn get(self, id: StateGraphId) -> crate::Result<Option<StoredStateGraph>>;
+    async fn insert(self, value: StoredStateGraph) -> crate::Result<()>;
+    async fn replace(self, value: StoredStateGraph) -> crate::Result<()>;
+    async fn delete(self, id: StateGraphId) -> crate::Result<()>;
     /// Toutes les entrées actuellement stockées.
-    async fn list(self) -> anyhow::Result<Vec<StoredStateGraph>>;
+    async fn list(self) -> crate::Result<Vec<StoredStateGraph>>;
 }
 
 #[async_trait]
 impl StateGraphStore for PgStore {
-    async fn get(self, id: StateGraphId) -> anyhow::Result<Option<StoredStateGraph>> {
+    async fn get(self, id: StateGraphId) -> crate::Result<Option<StoredStateGraph>> {
         let id = id.to_string();
         let row = sqlx::query("SELECT id, entry, nodes, edges FROM state_graph WHERE id = $1")
             .bind(&id)
@@ -65,7 +65,7 @@ impl StateGraphStore for PgStore {
         row.as_ref().map(decode_row).transpose()
     }
 
-    async fn insert(self, value: StoredStateGraph) -> anyhow::Result<()> {
+    async fn insert(self, value: StoredStateGraph) -> crate::Result<()> {
         let id = value.id.to_string();
 
         sqlx::query("INSERT INTO state_graph (id, entry, nodes, edges) VALUES ($1, $2, $3, $4)")
@@ -78,7 +78,7 @@ impl StateGraphStore for PgStore {
         Ok(())
     }
 
-    async fn replace(self, value: StoredStateGraph) -> anyhow::Result<()> {
+    async fn replace(self, value: StoredStateGraph) -> crate::Result<()> {
         let id = value.id.to_string();
 
         sqlx::query("UPDATE state_graph SET entry = $2, nodes = $3, edges = $4 WHERE id = $1")
@@ -91,13 +91,13 @@ impl StateGraphStore for PgStore {
         Ok(())
     }
 
-    async fn delete(self, id: StateGraphId) -> anyhow::Result<()> {
+    async fn delete(self, id: StateGraphId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM state_graph WHERE id = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
     }
 
-    async fn list(self) -> anyhow::Result<Vec<StoredStateGraph>> {
+    async fn list(self) -> crate::Result<Vec<StoredStateGraph>> {
         let rows = sqlx::query("SELECT id, entry, nodes, edges FROM state_graph").fetch_all(self.pool()).await?;
         rows.iter().map(decode_row).collect()
     }
@@ -107,11 +107,11 @@ impl StateGraphStore for PgStore {
 /// [`crate::session::store`] (`Command`) pour la raison de cette indirection
 /// par acteur plutôt qu'un accès direct au store depuis chaque appelant.
 enum Command {
-    Get(StateGraphId, oneshot::Sender<anyhow::Result<Option<StoredStateGraph>>>),
-    List(oneshot::Sender<anyhow::Result<Vec<StoredStateGraph>>>),
-    Insert(StoredStateGraph, oneshot::Sender<anyhow::Result<()>>),
-    Replace(StoredStateGraph, oneshot::Sender<anyhow::Result<()>>),
-    Delete(StateGraphId, oneshot::Sender<anyhow::Result<()>>),
+    Get(StateGraphId, oneshot::Sender<crate::Result<Option<StoredStateGraph>>>),
+    List(oneshot::Sender<crate::Result<Vec<StoredStateGraph>>>),
+    Insert(StoredStateGraph, oneshot::Sender<crate::Result<()>>),
+    Replace(StoredStateGraph, oneshot::Sender<crate::Result<()>>),
+    Delete(StateGraphId, oneshot::Sender<crate::Result<()>>),
     Shutdown,
 }
 
@@ -172,31 +172,31 @@ pub struct StateGraphStoreClient(mpsc::UnboundedSender<Command>, Arc<Handler>);
 
 #[async_trait]
 impl StateGraphStore for StateGraphStoreClient {
-    async fn get(self, id: StateGraphId) -> anyhow::Result<Option<StoredStateGraph>> {
+    async fn get(self, id: StateGraphId) -> crate::Result<Option<StoredStateGraph>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Get(id, tx))?;
         rx.await?
     }
 
-    async fn insert(self, value: StoredStateGraph) -> anyhow::Result<()> {
+    async fn insert(self, value: StoredStateGraph) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Insert(value, tx))?;
         rx.await?
     }
 
-    async fn replace(self, value: StoredStateGraph) -> anyhow::Result<()> {
+    async fn replace(self, value: StoredStateGraph) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Replace(value, tx))?;
         rx.await?
     }
 
-    async fn delete(self, id: StateGraphId) -> anyhow::Result<()> {
+    async fn delete(self, id: StateGraphId) -> crate::Result<()> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::Delete(id, tx))?;
         rx.await?
     }
 
-    async fn list(self) -> anyhow::Result<Vec<StoredStateGraph>> {
+    async fn list(self) -> crate::Result<Vec<StoredStateGraph>> {
         let (tx, rx) = oneshot::channel();
         self.0.send(Command::List(tx))?;
         rx.await?

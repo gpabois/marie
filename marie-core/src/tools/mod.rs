@@ -16,9 +16,10 @@ use bytemuck::{Pod, Zeroable};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, pubsub::PubSubMessage, session::SessionId, tools::client::ToolError};
+use crate::{agent::AgentFrameId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, session::SessionId, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
+pub use marie_macros::core_tool;
 
 pub const JOB_TOOL_EXECUTE: &str = "marie/jobs/tools/execute";
 pub const NS_TOOL: &str = "marie/ns/tools";
@@ -67,7 +68,7 @@ pub struct ToolDefinition {
 }
 
 #[async_trait]
-pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
+pub trait Toolable: Clone + Sized + 'static {
     const NAME: &str;
     const DESCRIPTION: &str;
 
@@ -88,12 +89,12 @@ pub trait Toolable<Cx: Send + 'static>: Clone + Sized + 'static {
     }
 
     #[cfg(feature = "tool-executor")]
-    async fn execute(self, cx: Cx, args: Self::Args) -> anyhow::Result<Self::Return>;
+    async fn execute(self, args: Self::Args) -> crate::Result<Self::Return>;
 
     #[cfg(feature = "tool-executor")]
-    fn register_executor(self, worker: &mut WorkerServer<Cx>) where Self: Clone + Send + Sync + 'static {
-        let executor = move |cx, args| {
-            self.clone().execute(cx, args)
+    fn register_executor(self, worker: &mut WorkerServer) where Self: Clone + Send + Sync + 'static {
+        let executor = move |args| {
+            self.clone().execute(args)
         };
 
         worker.register_job_executor(Self::NAME, executor);
@@ -132,10 +133,10 @@ impl Display for ToolCallId {
 }
 
 impl std::str::FromStr for ToolCallId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| anyhow::anyhow!("format de ToolCallId invalide : {s}"))?;
+        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format de ToolCallId invalide : {s}"))?;
         Ok(Self(session_part.parse()?, local_part.parse()?))
     }
 }
@@ -165,7 +166,7 @@ pub struct ToolCall {
     /// cette session ; nécessaire pour que
     /// `session::server::report_tool_execution` sache dans quel frame
     /// réinjecter le résultat.
-    pub agent_id: AgentId,
+    pub agent_id: AgentFrameId,
     pub name: ToolName,
     pub parameters: Value
 }
@@ -196,10 +197,10 @@ pub enum ToolEvent {
     }
 }
 
-impl TryFrom<PubSubMessage> for ToolEvent {
+impl TryFrom<EventEnvelope> for ToolEvent {
     type Error = ToolError;
 
-    fn try_from(value: PubSubMessage) -> Result<Self, Self::Error> {
+    fn try_from(value: EventEnvelope) -> Result<Self, Self::Error> {
         use ToolError::NotToolEvent;
 
         if !Self::is(&value) { return Err(NotToolEvent) };
@@ -208,9 +209,9 @@ impl TryFrom<PubSubMessage> for ToolEvent {
     }
 }
 
-impl From<ToolEvent> for PubSubMessage {
+impl From<ToolEvent> for EventEnvelope {
     fn from(value: ToolEvent) -> Self {
-        PubSubMessage { 
+        EventEnvelope { 
             id: String::default(), 
             topic: value.topic(), 
             payload: serde_json::to_vec(&value).unwrap(), 
@@ -231,7 +232,7 @@ impl ToolEvent {
 impl ToolEvent {
     pub const TOPIC_PREFIX: &str = "marie/tools/events";
 
-    pub fn is(msg: &PubSubMessage) -> bool {
+    pub fn is(msg: &EventEnvelope) -> bool {
         msg.topic.starts_with(Self::TOPIC_PREFIX)
     }
 }

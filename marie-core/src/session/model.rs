@@ -5,7 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    agent::{AgentId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, 
+    agent::{AgentFrameId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, 
     id::ID, 
     state::State, 
     graph::{GraphFrame, GraphFrameId}, 
@@ -31,7 +31,7 @@ impl fmt::Display for SessionId {
 }
 
 impl FromStr for SessionId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.parse()?))
@@ -70,7 +70,7 @@ impl fmt::Display for SessionLogId {
 }
 
 impl FromStr for SessionLogId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.parse()?))
@@ -116,8 +116,6 @@ pub struct SessionLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
-    pub frames: AgentFrameMap,
-    pub graphs: HashMap<GraphFrameId, GraphFrame>,
     pub logs: Vec<SessionLog>,
     pub state: State,
     /// Horodatage géré par le store (voir
@@ -134,39 +132,5 @@ pub struct Session {
 impl Session {
     pub fn state(&self) -> &State {
         &self.state
-    }
-
-    pub fn graph_frame(&self, id: &GraphFrameId) -> Option<&GraphFrame> {
-        self.graphs.get(id)
-    }
-}
-
-
-#[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AgentFrameMap(HashMap<AgentId, AgentFrame>);
-
-impl From<HashMap<AgentId, AgentFrame>> for AgentFrameMap {
-    fn from(value: HashMap<AgentId, AgentFrame>) -> Self {
-        Self(value)
-    }
-}
-
-impl std::ops::Deref for AgentFrameMap {
-    type Target = HashMap<AgentId, AgentFrame>;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for AgentFrameMap {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
-}
-
-impl AgentFrameMap {
-    pub fn iter_waiting_hitl(&self) -> impl Iterator<Item=&AgentFrame> {
-        self.values().filter(|frame| matches!(&frame.status, AgentStatus::Yielding(YieldStatus::WaitingHitl { .. })))
     }
 }

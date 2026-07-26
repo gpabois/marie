@@ -26,8 +26,8 @@ use crate::{
 #[async_trait]
 pub trait VarStore: Send + Sync {
     async fn value(&self, key: &str) -> Option<Value>;
-    async fn set_value(&self, key: &str, value: Value) -> anyhow::Result<()>;
-    async fn remove_value(&self, key: &str) -> anyhow::Result<()>;
+    async fn set_value(&self, key: &str, value: Value) -> crate::Result<()>;
+    async fn remove_value(&self, key: &str) -> crate::Result<()>;
     async fn values(&self) -> HashMap<String, Value>;
 }
 
@@ -52,11 +52,11 @@ impl VarStore for WorkspaceVarStore {
         self.client.value(self.workspace_id, key).await
     }
 
-    async fn set_value(&self, key: &str, value: Value) -> anyhow::Result<()> {
+    async fn set_value(&self, key: &str, value: Value) -> crate::Result<()> {
         self.client.set_value(self.workspace_id, key.to_string(), value).await
     }
 
-    async fn remove_value(&self, key: &str) -> anyhow::Result<()> {
+    async fn remove_value(&self, key: &str) -> crate::Result<()> {
         self.client.remove_value(self.workspace_id, key.to_string()).await
     }
 
@@ -84,11 +84,11 @@ impl VarStore for SessionVarStore {
         self.client.value(self.session_id, key).await
     }
 
-    async fn set_value(&self, key: &str, value: Value) -> anyhow::Result<()> {
+    async fn set_value(&self, key: &str, value: Value) -> crate::Result<()> {
         self.client.set_value(self.session_id, key.to_string(), value).await
     }
 
-    async fn remove_value(&self, key: &str) -> anyhow::Result<()> {
+    async fn remove_value(&self, key: &str) -> crate::Result<()> {
         self.client.remove_value(self.session_id, key.to_string()).await
     }
 
@@ -148,7 +148,7 @@ fn encode_value(value: &Value) -> Vec<u8> {
 
 #[async_trait]
 impl FileSystem for VarFileSystem {
-    async fn mkdir(&self, path: &str) -> anyhow::Result<()> {
+    async fn mkdir(&self, path: &str) -> crate::Result<()> {
         let key = path_to_key(path);
         if self.store.value(&key).await.is_none() {
             self.store.set_value(&key, Value::Object(serde_json::Map::new())).await?;
@@ -156,7 +156,7 @@ impl FileSystem for VarFileSystem {
         Ok(())
     }
 
-    async fn ls(&self, path: &str) -> anyhow::Result<Vec<String>> {
+    async fn ls(&self, path: &str) -> crate::Result<Vec<String>> {
         let prefix = path_to_key(path);
         let values = self.store.values().await;
 
@@ -166,12 +166,12 @@ impl FileSystem for VarFileSystem {
         Ok(children)
     }
 
-    async fn open(&self, path: &str, options: OpenOptions) -> anyhow::Result<BoxedDescriptor> {
+    async fn open(&self, path: &str, options: OpenOptions) -> crate::Result<BoxedDescriptor> {
         let key = path_to_key(path);
         let existing = self.store.value(&key).await;
 
         if existing.is_none() && !(options.create || options.create_new || options.write) {
-            anyhow::bail!("variable introuvable : {path}");
+            crate::bail!("variable introuvable : {path}");
         }
 
         let bytes = existing.map(|value| encode_value(&value)).unwrap_or_default();
@@ -181,7 +181,7 @@ impl FileSystem for VarFileSystem {
         Ok(Box::pin(VarDescriptor { cursor, write, key, store: self.store.clone(), flush: None }))
     }
 
-    async fn remove(&self, path: &str) -> anyhow::Result<()> {
+    async fn remove(&self, path: &str) -> crate::Result<()> {
         let key = path_to_key(path);
         // Supprime la valeur elle-même et toutes celles nichées dessous
         // (dossier récursif, comme `rm -r`) — un store clé-valeur plat n'a
@@ -196,7 +196,7 @@ impl FileSystem for VarFileSystem {
     }
 }
 
-type FlushFuture = Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send>>;
+type FlushFuture = Pin<Box<dyn Future<Output = crate::Result<()>> + Send>>;
 
 /// Descripteur retourné par [`VarFileSystem::open`] : les octets écrits sont
 /// bufferisés en mémoire (une variable tient toujours en RAM, contrairement
@@ -286,12 +286,12 @@ mod tests {
             self.0.lock().await.get(key).cloned()
         }
 
-        async fn set_value(&self, key: &str, value: Value) -> anyhow::Result<()> {
+        async fn set_value(&self, key: &str, value: Value) -> crate::Result<()> {
             self.0.lock().await.insert(key.to_string(), value);
             Ok(())
         }
 
-        async fn remove_value(&self, key: &str) -> anyhow::Result<()> {
+        async fn remove_value(&self, key: &str) -> crate::Result<()> {
             self.0.lock().await.remove(key);
             Ok(())
         }

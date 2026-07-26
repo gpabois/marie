@@ -1,9 +1,7 @@
-use crate::agent::frame::AgentFrame;
-use crate::graph::GraphFrame;
-use crate::session::{Session, SessionId};
+use crate::session::store::SessionStorable;
+use crate::session::{Session, SessionId, SessionLog};
+use crate::state::State;
 use crate::store::PgStore;
-
-use super::SessionStore;
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -13,8 +11,8 @@ use sqlx::types::Json;
 
 
 #[async_trait]
-impl SessionStore for PgStore {
-    async fn list(self) -> anyhow::Result<Vec<Session>> {
+impl SessionStorable for PgStore {
+    async fn list(&self) -> crate::Result<Vec<Session>> {
         let rows = sqlx::query(
             "SELECT id, frames, graphs, orchestrations, hitls, logs, vars, created_at, last_updated_at \
              FROM session",
@@ -25,7 +23,7 @@ impl SessionStore for PgStore {
         rows.into_iter().map(decode_row).collect()  
     }
 
-    async fn get(self, id: SessionId) -> anyhow::Result<Option<Session>> {
+    async fn get(&self, id: SessionId) -> crate::Result<Option<Session>> {
         let id = id.to_string();
         let row = sqlx::query(
             "SELECT id, frames, graphs, orchestrations, hitls, logs, vars, created_at, last_updated_at \
@@ -38,26 +36,21 @@ impl SessionStore for PgStore {
         row.map(decode_row).transpose()
     }
 
-    async fn insert(mut self, session: Session) -> anyhow::Result<()> {
+    async fn insert(&self, session: Session) -> crate::Result<()> {
         let id = session.id.to_string();
 
         sqlx::query(
-            "INSERT INTO session (id, frames, graphs, orchestrations, hitls, logs, vars, created_at, last_updated_at) \
+            "INSERT INTO marie_sessions (id, frames, graphs, orchestrations, hitls, logs, vars, created_at, last_updated_at) \
              VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())",
         )
         .bind(&id)
-        .bind(Json(&session.frames))
-        .bind(Json(&session.graphs))
-        .bind(Json(&session.orchestrations))
-        .bind(Json(&session.hitls))
         .bind(Json(&session.logs))
-        .bind(Json(&session.vars))
         .execute(self.pool())
         .await?;
         Ok(())
     }
 
-    async fn replace(mut self, session: Session) -> anyhow::Result<()> {
+    async fn replace(&self, session: Session) -> crate::Result<()> {
         let id = session.id.to_string();
 
         sqlx::query(
@@ -66,18 +59,14 @@ impl SessionStore for PgStore {
              WHERE id = $1",
         )
         .bind(&id)
-        .bind(Json(&session.frames))
-        .bind(Json(&session.graphs))
-        .bind(Json(&session.orchestrations))
-        .bind(Json(&session.hitls))
         .bind(Json(&session.logs))
-        .bind(Json(&session.vars))
+        .bind(Json(&session.state))
         .execute(self.pool())
         .await?;
         Ok(())
     }
 
-    async fn delete(mut self, id: SessionId) -> anyhow::Result<()> {
+    async fn delete(&self, id: SessionId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM session WHERE id = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
@@ -93,15 +82,11 @@ impl SessionStore for PgStore {
 /// `persistency::session`), cette `Session`-ci est un enregistrement
 /// classique remplacé en bloc à chaque mutation, donc décomposable colonne à
 /// colonne comme `expert`/`model`/`tool`.
-fn decode_row(row: PgRow) -> anyhow::Result<Session> {
+fn decode_row(row: PgRow) -> crate::Result<Session> {
     Ok(Session {
         id: row.try_get::<String, _>("id")?.parse()?,
-        frames: row.try_get::<Json<std::collections::HashMap<AgentId, AgentFrame>>, _>("frames")?.0.into(),
-        graphs: row.try_get::<Json<std::collections::HashMap<_, GraphFrame>>, _>("graphs")?.0,
-        orchestrations: row.try_get::<Json<std::collections::HashMap<_, OrchestrationFrame>>, _>("orchestrations")?.0,
-        hitls: row.try_get::<Json<std::collections::HashMap<_, HitlFrame>>, _>("hitls")?.0,
         logs: row.try_get::<Json<Vec<SessionLog>>, _>("logs")?.0,
-        vars: row.try_get::<Json<std::collections::HashMap<String, serde_json::Value>>, _>("vars")?.0,
+        state: row.try_get::<Json<State>, _>("vars")?.0,
         created_at: row.try_get::<DateTime<Utc>, _>("created_at")?,
         last_updated_at: row.try_get::<DateTime<Utc>, _>("last_updated_at")?,
     })

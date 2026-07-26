@@ -25,7 +25,7 @@ impl fmt::Display for WorkspaceId {
 }
 
 impl FromStr for WorkspaceId {
-    type Err = anyhow::Error;
+    type Err = crate::Error;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         Ok(Self(s.parse()?))

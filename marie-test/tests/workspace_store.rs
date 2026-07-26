@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use marie_core::id::generate_id;
 use marie_core::session::SessionId;
-use marie_core::workspace::store::{WorkspaceStore, WorkspaceStoreActor};
+use marie_core::workspace::store::{WorkspaceStorable, WorkspaceStoreActor};
 use marie_core::workspace::{Workspace, WorkspaceId};
 use serde_json::json;
 
@@ -18,7 +18,7 @@ use serde_json::json;
 struct MemoryWorkspaceStore(Arc<Mutex<HashMap<WorkspaceId, Workspace>>>);
 
 #[async_trait]
-impl WorkspaceStore for MemoryWorkspaceStore {
+impl WorkspaceStorable for MemoryWorkspaceStore {
     async fn get(self, id: WorkspaceId) -> anyhow::Result<Option<Workspace>> {
         Ok(self.0.lock().unwrap().get(&id).cloned())
     }

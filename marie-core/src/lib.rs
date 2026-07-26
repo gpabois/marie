@@ -1,4 +1,5 @@
 pub mod agent;
+pub mod error;
 pub mod id;
 pub mod tools;
 
@@ -12,13 +13,12 @@ pub mod workspace;
 pub mod rpc;
 pub mod sink;
 pub mod layer;
-pub mod pubsub;
+pub mod events;
 pub mod session;
-pub mod state_graph;
 pub mod hitl;
 #[cfg(feature = "catalog")]
 pub mod store;
-pub mod client;
+
 #[cfg(feature = "catalog")]
 pub mod persistency;
 #[cfg(feature = "catalog")]
@@ -28,9 +28,14 @@ pub mod di;
 pub mod schema;
 pub mod state;
 pub mod condition;
-pub mod annuary;
 pub mod node;
+pub mod ressources;
+pub mod lease;
+pub mod annuary;
+pub mod hrw;
+pub mod post;
+pub mod catalog;
 
-pub use client::Client;
+pub use error::{Context, Error, Result};
 #[cfg(feature = "catalog")]
 pub use network::catalog::{start_catalog, CatalogArgs};

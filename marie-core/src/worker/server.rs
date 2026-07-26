@@ -16,28 +16,23 @@ use tokio::select;
 use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder)]
-pub struct WorkerServerArgs<'di, Di, Cx, B> where B: Fn(&JobInstance) -> Cx + Send + Sync + 'static {
+pub struct WorkerServerArgs<'di, Di> {
     container: &'di Di,
-    job_context_builder: B
 }
 
-type JobExecutor<Cx> =  Arc<dyn (Fn(Cx, serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, anyhow::Error>>) + Send + Sync + 'static>;
+type JobExecutor = Arc<dyn (Fn(serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, crate::Error>>) + Send + Sync + 'static>;
 
-enum Command<Cx> {
-    Register(String, JobExecutor<Cx>)
+enum Command {
+    Register(String, JobExecutor)
 }
 
 pub struct WorkerServerActor;
 
 impl WorkerServerActor {
-    pub fn new<B, Cx>(
+    pub fn new(
         layer: impl Layer<Send=WorkerEvent, Received = WorkerEvent>,
-        mut args: WorkerServerArgs<Cx, B>
-    ) -> WorkerServer<Cx>
-        where
-            B: Fn(&JobInstance) -> Cx + Send + Sync + 'static,
-            Cx: Send + 'static
-    {
+        mut args: WorkerServerArgs,
+    ) -> WorkerServer {
         args.bootstrap.register_to_namespaces([Namespace::from_static(NS_WORKER)]);
 
         let (tx, rx) = layer.split();
@@ -46,9 +41,9 @@ impl WorkerServerActor {
         let _rx = rx.boxed();
 
         let (event_tx, mut event_rx) = mpsc::unbounded::<WorkerEvent>();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded::<Command<Cx>>();
+        let (cmd_tx, mut cmd_rx) = mpsc::unbounded::<Command>();
 
-        let executors: Arc<Mutex<HashMap<String, JobExecutor<Cx>>>> = Default::default();
+        let executors: Arc<Mutex<HashMap<String, JobExecutor>>> = Default::default();
         let execs = executors.clone();
 
         tokio::spawn(async move {
@@ -71,7 +66,6 @@ impl WorkerServerActor {
         
         // on enregistre ce qu'il faut
         let evtx = event_tx.clone();
-        let job_context_builder = args.job_context_builder;
 
         // enregistre la fonction execute
         args.rpc_server.register(RPC_SCHEDULE_JOB, move |job: JobInstance, _| {
@@ -79,16 +73,14 @@ impl WorkerServerActor {
                 return std::future::ready(Err("aucun exécuteur pour le travail n'a été trouvé")).boxed();
             };
 
-            let cx = job_context_builder(&job);
-
             let Ok(args) = serde_json::from_value(job.args) else {
                 return std::future::ready(Err("erreur lors de la desérialization des arguments du job")).boxed();
             };
 
             let mut evtx = evtx.clone();
-            
+
             let _ = tokio::spawn(async move {
-                let task = AssertUnwindSafe(executor(cx, args));
+                let task = AssertUnwindSafe(executor(args));
                 let result = task.catch_unwind().await;
 
                 match result {
@@ -123,23 +115,23 @@ impl WorkerServerActor {
 }
 
 #[derive(Clone)]
-pub struct WorkerServer<Cx> {
+pub struct WorkerServer {
     event_tx: mpsc::UnboundedSender<WorkerEvent>,
-    cmd_tx: mpsc::UnboundedSender<Command<Cx>>
+    cmd_tx: mpsc::UnboundedSender<Command>
 }
 
-impl<Cx: Send> WorkerServer<Cx> {
+impl WorkerServer {
     pub fn register_job_executor<F, Args, R, Fut>(&mut self, name: impl ToString, executor: F)
-        where F: (Fn(Cx, Args) -> Fut) + Send + Sync + 'static, 
-                Fut: Future<Output=Result<R, anyhow::Error>> + Send + 'static,
+        where F: (Fn(Args) -> Fut) + Send + Sync + 'static,
+                Fut: Future<Output=Result<R, crate::Error>> + Send + 'static,
                 Args: DeserializeOwned,
                 R: Serialize
     {
         use Command::Register;
 
-        let wrapped = move |cx: Cx, args: serde_json::Value| {
+        let wrapped = move |args: serde_json::Value| {
             let args = serde_json::from_value(args).unwrap();
-            let task = executor(cx, args);
+            let task = executor(args);
 
             async move {
                  task

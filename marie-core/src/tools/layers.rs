@@ -1,6 +1,6 @@
 use futures::{FutureExt, SinkExt, StreamExt, stream::BoxStream};
 
-use crate::{layer::{Layer, LayerChain}, worker::WorkerEvent, pubsub::PubSubMessage, sink::{BoxSink, SinkBoxExt}, tools::ToolEvent};
+use crate::{layer::{Layer, LayerChain}, worker::WorkerEvent, events::EventEnvelope, sink::{BoxSink, SinkBoxExt}, tools::ToolEvent};
 
 pub struct ToolEventLayer(<Self as Layer>::Sender, <Self as Layer>::Receiver);
 
@@ -8,7 +8,7 @@ impl Layer for ToolEventLayer {
     type Send = ToolEvent;
     type Received = ToolEvent;
 
-    type Sender = BoxSink<'static, Self::Send, anyhow::Error>;
+    type Sender = BoxSink<'static, Self::Send, crate::Error>;
     type Receiver = BoxStream<'static, Self::Received>;
 
     fn split(self) -> (Self::Sender, Self::Receiver) {
@@ -16,7 +16,7 @@ impl Layer for ToolEventLayer {
     }
 }
 
-impl<L> LayerChain<L, ()> for ToolEventLayer where L: Layer<Send = PubSubMessage, Received = PubSubMessage> {
+impl<L> LayerChain<L, ()> for ToolEventLayer where L: Layer<Send = EventEnvelope, Received = EventEnvelope> {
     fn chain(layer: L, _: ()) -> Self {
         let (tx, rx) = layer.split();
 
@@ -33,7 +33,7 @@ impl<L> LayerChain<L, ()> for ToolEventLayer where L: Layer<Send = PubSubMessage
         }).boxed();
 
         let tx = tx.with(|event: ToolEvent| {
-            std::future::ready(Ok(PubSubMessage::from(event)))
+            std::future::ready(Ok(EventEnvelope::from(event)))
         }).boxed_sink();
 
         Self(tx, rx)

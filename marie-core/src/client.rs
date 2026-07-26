@@ -25,7 +25,7 @@ pub struct Client {
 }
 
 impl Client {
-    pub fn new(args: ClientArgs) -> anyhow::Result<Self> {
+    pub fn new(args: ClientArgs) -> crate::Result<Self> {
         let swarm = create_swarm(NodeKind::Client)?;
         let local_peer_id = *swarm.local_peer_id();
 
@@ -73,7 +73,7 @@ impl Client {
         self.container.resolve()
     }
 
-    pub async fn connect(&self) -> anyhow::Result<()> {
+    pub async fn connect(&self) -> crate::Result<()> {
         self.network.clone().listen(false).await;
         Ok(())
     }

@@ -4,7 +4,7 @@ use serde_json::Value;
 use crate::{
     agent::status::{AgentStatus, YieldStatus},
     job::Job,
-    network::worker::{JobContext, client::WorkerClient},
+    network::worker::client::WorkerClient,
     rpc::Void,
     session::{client::SessionClient, worker::RunAgent},
     state_graph::{
@@ -51,7 +51,7 @@ fn stack_top_finished(frame: &GraphFrame) -> bool {
 /// le fait *avancer* (pas ré-exécuter — l'action du nœud `Subgraph` a déjà
 /// eu lieu, c'est tout le sous-graphe qu'elle représentait) au-delà du nœud
 /// `Subgraph` qui l'avait poussé.
-async fn pop_and_resume(frame: &mut GraphFrame, registry: &RustRegistry) -> anyhow::Result<()> {
+async fn pop_and_resume(frame: &mut GraphFrame, registry: &RustRegistry) -> crate::Result<()> {
     let finished = frame.stack.pop().expect("stack_top_finished garantit une pile non vide");
     let output = finished.graph.cursors.first().map(|cursor| cursor.last_output.clone()).unwrap_or(Value::Null);
 
@@ -78,7 +78,8 @@ impl Job for RunGraphStep {
     type Args = GraphFrame;
     type Return = Void;
 
-    async fn execute(self, mut frame: GraphFrame, _cx: JobContext) -> Result<Self::Return, anyhow::Error> {
+    #[cfg(feature = "job-executor")]
+    async fn execute(self, mut frame: GraphFrame) -> Result<Self::Return, crate::Error> {
         let session_id = frame.id.session_id();
 
         if stack_top_finished(&frame) {

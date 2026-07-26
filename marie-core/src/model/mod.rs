@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{agent::AgentId, rpc::RpcError, secret::SecretError, tools::{ToolDefinition as MarieTool, ToolCall, ToolCallId}};
+use crate::{agent::AgentFrameId, rpc::RpcError, secret::SecretError, tools::{ToolDefinition as MarieTool, ToolCall, ToolCallId}};
 
 pub mod catalog;
 pub mod model;
@@ -22,6 +22,7 @@ pub use server::ModelServer;
 pub mod rpc;
 
 pub use model::{ModelId, Model, EncryptedModel};
+pub use client::ModelClient;
 pub use rpc::{GetModel, InsertModel, ListModel, RemoveModel, UpdateModel};
 
 pub const NS_MODEL: &str = "/marie/ns/models";
@@ -96,7 +97,7 @@ pub enum ModelStreamEvent {
 /// `SessionClient::insert_in_log` au fil de l'eau plutôt que d'attendre la
 /// réponse complète.
 #[inline]
-pub async fn execute(agent_id: AgentId, decl: Model, tools: &[MarieTool], input: impl ToString) -> Result<impl Stream<Item = ModelStreamEvent> + Send, ModelError> {
+pub async fn execute(agent_id: AgentFrameId, decl: Model, tools: &[MarieTool], input: impl ToString) -> Result<impl Stream<Item = ModelStreamEvent> + Send, ModelError> {
     let Model::OpenAICompatible { base_url, client_id, api_key, model, system_prompt, .. } = decl;
 
     let config = OpenAIConfig::new()

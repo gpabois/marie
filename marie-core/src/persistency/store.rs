@@ -34,7 +34,7 @@ pub struct RedbStore {
 }
 
 impl RedbStore {
-    pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+    pub fn open(path: impl AsRef<Path>) -> crate::Result<Self> {
         let db = redb::Database::create(path)?;
 
         // Crée la table dès l'ouverture : évite d'avoir à distinguer "table
@@ -49,11 +49,11 @@ impl RedbStore {
     }
 
     /// Valeur brute associée à `namespace/id`, si connue.
-    pub(crate) async fn get_raw(&self, namespace: &str, id: &str) -> anyhow::Result<Option<Vec<u8>>> {
+    pub(crate) async fn get_raw(&self, namespace: &str, id: &str) -> crate::Result<Option<Vec<u8>>> {
         let db = self.db.clone();
         let key = raw_key(namespace, id);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Option<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> crate::Result<Option<Vec<u8>>> {
             let read_txn = db.begin_read()?;
             let table = read_txn.open_table(KV_TABLE)?;
             Ok(table.get(key.as_slice())?.map(|value| value.value().to_vec()))
@@ -61,11 +61,11 @@ impl RedbStore {
         .await?
     }
 
-    pub(crate) async fn put_raw(&self, namespace: &str, id: &str, value: Vec<u8>) -> anyhow::Result<()> {
+    pub(crate) async fn put_raw(&self, namespace: &str, id: &str, value: Vec<u8>) -> crate::Result<()> {
         let db = self.db.clone();
         let key = raw_key(namespace, id);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> crate::Result<()> {
             let write_txn = db.begin_write()?;
             {
                 let mut table = write_txn.open_table(KV_TABLE)?;
@@ -77,11 +77,11 @@ impl RedbStore {
         .await?
     }
 
-    pub(crate) async fn delete_raw(&self, namespace: &str, id: &str) -> anyhow::Result<()> {
+    pub(crate) async fn delete_raw(&self, namespace: &str, id: &str) -> crate::Result<()> {
         let db = self.db.clone();
         let key = raw_key(namespace, id);
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<()> {
+        tokio::task::spawn_blocking(move || -> crate::Result<()> {
             let write_txn = db.begin_write()?;
             {
                 let mut table = write_txn.open_table(KV_TABLE)?;
@@ -94,11 +94,11 @@ impl RedbStore {
     }
 
     /// Toutes les valeurs brutes dont la clé commence par `namespace/`.
-    pub(crate) async fn list_raw(&self, namespace: &str) -> anyhow::Result<Vec<Vec<u8>>> {
+    pub(crate) async fn list_raw(&self, namespace: &str) -> crate::Result<Vec<Vec<u8>>> {
         let db = self.db.clone();
         let prefix = format!("{namespace}/").into_bytes();
 
-        tokio::task::spawn_blocking(move || -> anyhow::Result<Vec<Vec<u8>>> {
+        tokio::task::spawn_blocking(move || -> crate::Result<Vec<Vec<u8>>> {
             let read_txn = db.begin_read()?;
             let table = read_txn.open_table(KV_TABLE)?;
 

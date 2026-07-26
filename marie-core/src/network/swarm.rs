@@ -1,20 +1,19 @@
 use std::sync::Arc;
 
-use futures::channel::oneshot;
 use futures::sink::Sink;
 use futures::{Stream, StreamExt as _};
-use libp2p::{StreamProtocol, Swarm, rendezvous};
+use libp2p::{PeerId, StreamProtocol, Swarm, rendezvous};
 use libp2p::swarm::NetworkBehaviour;
 use libp2p::{gossipsub, identify, mdns, request_response};
 use libp2p::swarm::SwarmEvent;
-use tokio::sync::watch;
+use tokio::sync::{watch, oneshot};
 use tokio::{select, sync::{broadcast, mpsc}};
 use tokio_stream::wrappers::{BroadcastStream, errors::BroadcastStreamRecvError};
 use tracing::{warn, info};
 
 use crate::layer::{BoxLayer, Layer};
-use crate::network::{LocalPeerId, NetworkStrategy, mux};
-use crate::network::peer::NodeKind;
+use crate::network::{LocalPeerId, NetworkStrategy};
+use crate::node::NodeId;
 use crate::{
     network::protocol::{NetworkCommand, NetworkEvent},
 };
@@ -26,7 +25,7 @@ struct Behaviour {
     pub identify: identify::Behaviour,
     pub pub_sub: gossipsub::Behaviour,
     pub rendezvous: rendezvous::client::Behaviour,
-    pub oneway: request_response::json::Behaviour<mux::Frame, ()>
+    pub oneway: request_response::json::Behaviour<Vec<u8>, ()>
 }
 
 
@@ -71,7 +70,7 @@ impl Stream for NetworkReceiver {
 pub struct NetworkSender(mpsc::UnboundedSender<NetworkCommand>);
 
 impl Sink<NetworkCommand> for NetworkSender {
-    type Error = anyhow::Error;
+    type Error = crate::Error;
 
     fn poll_ready(self: std::pin::Pin<&mut Self>, _: &mut std::task::Context<'_>) -> std::task::Poll<Result<(), Self::Error>> {
         std::task::Poll::Ready(Ok(()))
@@ -130,17 +129,25 @@ pub struct SwarmNetwork {
 }
 
 impl SwarmNetwork {
-    pub fn new(kind: NodeKind) -> anyhow::Result<Self> {
-        let swarm = create_swarm(kind)?;
-        Ok(Actor::create(swarm, kind))
+    pub fn new() -> crate::Result<Self> {
+        let swarm = create_swarm()?;
+        Ok(Actor::create(swarm))
     }
 }
 
 impl NetworkStrategy for SwarmNetwork {
-    fn layer(&self) -> crate::layer::BoxLayer<NetworkCommand, NetworkEvent, anyhow::Error> {
+    fn layer(&self) -> crate::layer::BoxLayer<NetworkCommand, NetworkEvent, crate::Error> {
         let sender = NetworkSender(self.commands.clone());
         let receiver = NetworkReceiver(BroadcastStream::new(self.events.subscribe()));
         BoxLayer::new(sender, receiver)
+    }
+
+    fn stream_events(&self) -> futures::prelude::stream::BoxStream<'static, NetworkEvent> {
+         NetworkReceiver(BroadcastStream::new(self.events.subscribe())).boxed()
+    }
+
+    fn execute(&self, cmd: NetworkCommand) {
+        self.commands.send(cmd);
     }
 
     fn local_id(&self) -> LocalPeerId {
@@ -149,13 +156,6 @@ impl NetworkStrategy for SwarmNetwork {
 }
 
 impl SwarmNetwork {
-    /// Récupère la couche de transport du réseau
-    pub fn transport(&self) -> NetworkLayer {
-        let sender = NetworkSender(self.commands.clone());
-        let receiver = NetworkReceiver(BroadcastStream::new(self.events.subscribe()));
-        NetworkLayer(sender, receiver)
-    }
-
     /// Connecte le noeud au réseau
     pub async fn listen(mut self, keep_looping: bool) {
         let (tx, rx) = oneshot::channel();
@@ -189,7 +189,6 @@ impl SwarmNetwork {
 }
 struct Actor {
     shutdown_signal: watch::Sender<bool>,
-    kind: NodeKind,
     swarm: Swarm<Behaviour>,
     // Diffusion des `NetworkEvent` (voir `NetworkClient::subscribe_events`)
     events_tx: broadcast::Sender<NetworkEvent>,
@@ -200,7 +199,7 @@ struct Actor {
 
 impl Actor {
     #[must_use]
-    pub fn create(swarm: Swarm<Behaviour>, kind: NodeKind) -> SwarmNetwork {
+    pub fn create(swarm: Swarm<Behaviour>) -> SwarmNetwork {
         let (commands_tx, commands_rx) = mpsc::unbounded_channel();
         let (events_tx, _) = broadcast::channel(NETWORK_EVENTS_CAPACITY);
         let (shutdown_subscribers, shutdown_signal) = watch::channel(false);
@@ -218,7 +217,6 @@ impl Actor {
 
         let actor = Actor {
             shutdown_signal: shutdown_subscribers,
-            kind,
             swarm,
             events_tx,
             commands_rx,
@@ -230,7 +228,7 @@ impl Actor {
         client
     }
 
-    async fn run(mut self) -> Result<(), anyhow::Error> {
+    async fn run(mut self) -> Result<(), crate::Error> {
 
         use NetworkCommand::*;
         use SwarmEvent::Behaviour;
@@ -245,41 +243,25 @@ impl Actor {
                     match cmd {
                         Listen(tx) => {
                             self.swarm.listen_on("/ip4/0.0.0.0/tcp/0".parse()?)?;
-                            info!("📡 Swarm [{}] initialisé. PeerID: {}", self.kind, self.swarm.local_peer_id());
+                            info!("📡 Swarm initialisé. PeerID: {}", self.swarm.local_peer_id());
                             let _ = tx.send(());
-                        }
-                        SendFrame(mut frame) => {
-                            // Le frame n'a pas de source, on va l'ajouter.
-                            // Le frame peut comporter une source notamment dans un cas de forward.
-                            if frame.source.is_none() {
-                                frame.source = Some(*self.swarm.local_peer_id());
-                            }
-                            
-                            // on a pas de destinataire, c'est plus compliqué.
-                            let Some(dest) = frame.destination.clone() else { 
-                                warn!("cannot send frame directly because the destination is unknown, will drop it.");
-                                continue;
-                            };
-
-                            self.swarm.behaviour_mut().oneway.send_request(&dest, frame);
+                        },
+                        Send(data, destination) => {
+                            let dest: PeerId = destination.into();
+                            self.swarm.behaviour_mut().oneway.send_request(&dest, data);
                         },
                         Subscribe(topic) => {
                             if let Err(error) = self.swarm.behaviour_mut().pub_sub.subscribe(&topic) {
                                 warn!(%error, %topic, "abonnement gossip échoué");
                             }
                         },
+                        Unsubscribe(topic) => {
+                            self.swarm.behaviour_mut().pub_sub.unsubscribe(&topic);                      
+                        }
                         Publish{topic, payload} => {
                             if let Err(error) = self.swarm.behaviour_mut().pub_sub.publish(topic.hash(), payload) {
                                 warn!(%error, %topic, "publication gossip échouée");
                             }                            
-                        },
-                        RegisterPeer { namespaces, bootstrap_peer_id, ttl } => {
-                            for namespace in namespaces {
-                                if let Err(error) = self.swarm.behaviour_mut().rendezvous.register(namespace, bootstrap_peer_id, ttl) {
-                                    warn!(%error, "échec de l'enregistrement auprès du serveur bootstrap");
-                                }
-                            }
-
                         },
                         Shutdown => {
                             info!("arrêt du réseau (swarm libp2p) demandé");
@@ -290,12 +272,15 @@ impl Actor {
                 },
                 event = self.swarm.select_next_some() => {
                     match event {
-                        Behaviour(Oneway(ReqResEvent::Message{peer, message: request_response::Message::Request{request: mut frame, ..}, ..})) => {
-                            frame.source = Some(peer);
-                            let _ = self.events_tx.send(NetworkEvent::ReceivedFrame(frame));
+                        Behaviour(Oneway(ReqResEvent::Message{peer, message: request_response::Message::Request{request: message, ..}, ..})) => {
+                            let event = NetworkEvent::ReceivedMessage {
+                                message,
+                                source: NodeId::from(peer)
+                            };
+                            let _ = self.events_tx.send(event);
                         },
                         Behaviour(PubSub(gossipsub::Event::Message { propagation_source, message_id, message })) => {
-                            let _ = self.events_tx.send(NetworkEvent::PubSubReceived { 
+                            let _ = self.events_tx.send(NetworkEvent::EventReceived { 
                                 id: message_id.to_string(),
                                 topic: message.topic.to_string(), 
                                 data: message.data, 
@@ -342,6 +327,10 @@ impl Actor {
                             use NetworkEvent::PeerDisconnected;
                             let _ = self.events_tx.send(PeerDisconnected { peer_id });
                         },
+                        SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } if num_established.get() == 1 => {
+                            use NetworkEvent::PeerConnected;
+                            let _ = self.events_tx.send(PeerConnected { peer_id });
+                        },
                         _ => {}
                     }
                 }
@@ -355,14 +344,14 @@ impl Actor {
     }
 }
 
-pub fn create_swarm(kind: NodeKind) -> Result<Swarm<Behaviour>, anyhow::Error> {
+pub fn create_swarm() -> Result<Swarm<Behaviour>, crate::Error> {
     let swarm = libp2p::SwarmBuilder::with_new_identity()
         .with_tokio()
         .with_tcp(libp2p::tcp::Config::default(), libp2p::noise::Config::new, libp2p::yamux::Config::default)?
         .with_behaviour(|key| {
             let mdns = mdns::tokio::Behaviour::new(mdns::Config::default(), key.public().to_peer_id()).unwrap();
             let id_config = identify::Config::new("/marie/id/1.0.0".to_string(), key.public())
-                .with_agent_version(format!("marie/{}/1.0.0", kind));
+                .with_agent_version(format!("marie/node/1.0.0"));
             
             let identify = identify::Behaviour::new(id_config);
             

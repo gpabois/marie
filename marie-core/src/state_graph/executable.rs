@@ -154,12 +154,12 @@ pub enum NodeOutcome {
 /// Fonction de nœud enregistrée (voir [`RustRegistry::register_node`]) :
 /// reçoit le contexte d'exécution courant (forme libre, voir
 /// [`RustRegistry::run_node`]) et produit un [`NodeOutcome`].
-pub type NodeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<NodeOutcome>> + Send + Sync>;
+pub type NodeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, crate::Result<NodeOutcome>> + Send + Sync>;
 
 /// Fonction d'arête enregistrée (voir [`RustRegistry::register_edge`]) :
 /// reçoit le même contexte qu'un [`NodeFn`] et décide si l'arête doit être
 /// empruntée (voir [`StateGraph::advance`]).
-pub type EdgeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<bool>> + Send + Sync>;
+pub type EdgeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, crate::Result<bool>> + Send + Sync>;
 
 /// Fonction de routage enregistrée (voir [`RustRegistry::register_router`]) :
 /// reçoit le même contexte qu'un [`NodeFn`]/[`EdgeFn`] mais, plutôt que de
@@ -167,7 +167,7 @@ pub type EdgeFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<bool>> 
 /// du nœud emprunter en renvoyant l'id du nœud cible (voir [`Node::router`]) —
 /// à la charge de l'appelant ([`StateGraph::advance_cursor`]) de vérifier que
 /// ce cible correspond bien à une arête sortante déclarée.
-pub type RouterFn = Arc<dyn Fn(Value) -> BoxFuture<'static, anyhow::Result<String>> + Send + Sync>;
+pub type RouterFn = Arc<dyn Fn(Value) -> BoxFuture<'static, crate::Result<String>> + Send + Sync>;
 
 /// Registre local des fonctions Rust utilisables comme [`Executable::Rust`]
 /// par les nœuds/arêtes d'un [`StateGraph`] — local au processus, donc à
@@ -192,7 +192,7 @@ impl RustRegistry {
     pub fn register_node<F, Fut>(&self, id: impl Into<String>, f: F)
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<NodeOutcome>> + Send + 'static,
+        Fut: Future<Output = crate::Result<NodeOutcome>> + Send + 'static,
     {
         let f: NodeFn = Arc::new(move |input| Box::pin(f(input)));
         self.nodes.write().unwrap().insert(id.into(), f);
@@ -202,7 +202,7 @@ impl RustRegistry {
     pub fn register_edge<F, Fut>(&self, id: impl Into<String>, f: F)
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<bool>> + Send + 'static,
+        Fut: Future<Output = crate::Result<bool>> + Send + 'static,
     {
         let f: EdgeFn = Arc::new(move |input| Box::pin(f(input)));
         self.edges.write().unwrap().insert(id.into(), f);
@@ -210,16 +210,16 @@ impl RustRegistry {
 
     /// Exécute la fonction de nœud `id` avec `input` — échoue si aucune
     /// fonction n'est enregistrée sous ce nom sur ce worker.
-    pub async fn run_node(&self, id: &str, input: Value) -> anyhow::Result<NodeOutcome> {
+    pub async fn run_node(&self, id: &str, input: Value) -> crate::Result<NodeOutcome> {
         let f = self.nodes.read().unwrap().get(id).cloned();
-        let f = f.ok_or_else(|| anyhow::anyhow!("fonction de nœud inconnue : {id}"))?;
+        let f = f.ok_or_else(|| crate::err!("fonction de nœud inconnue : {id}"))?;
         f(input).await
     }
 
     /// Évalue la fonction d'arête `id` avec `input`.
-    pub async fn eval_edge(&self, id: &str, input: Value) -> anyhow::Result<bool> {
+    pub async fn eval_edge(&self, id: &str, input: Value) -> crate::Result<bool> {
         let f = self.edges.read().unwrap().get(id).cloned();
-        let f = f.ok_or_else(|| anyhow::anyhow!("fonction d'arête inconnue : {id}"))?;
+        let f = f.ok_or_else(|| crate::err!("fonction d'arête inconnue : {id}"))?;
         f(input).await
     }
 
@@ -227,16 +227,16 @@ impl RustRegistry {
     pub fn register_router<F, Fut>(&self, id: impl Into<String>, f: F)
     where
         F: Fn(Value) -> Fut + Send + Sync + 'static,
-        Fut: Future<Output = anyhow::Result<String>> + Send + 'static,
+        Fut: Future<Output = crate::Result<String>> + Send + 'static,
     {
         let f: RouterFn = Arc::new(move |input| Box::pin(f(input)));
         self.routers.write().unwrap().insert(id.into(), f);
     }
 
     /// Évalue la fonction de routage `id` avec `input`.
-    pub async fn eval_router(&self, id: &str, input: Value) -> anyhow::Result<String> {
+    pub async fn eval_router(&self, id: &str, input: Value) -> crate::Result<String> {
         let f = self.routers.read().unwrap().get(id).cloned();
-        let f = f.ok_or_else(|| anyhow::anyhow!("fonction de routage inconnue : {id}"))?;
+        let f = f.ok_or_else(|| crate::err!("fonction de routage inconnue : {id}"))?;
         f(input).await
     }
 }
@@ -284,7 +284,7 @@ pub(crate) async fn resolve_agent_task(
         _ => format!("{}\n\n{task}\n\nRésultat du pas précédent: {input}", expert.prompt),
     };
 
-    let agent_id = crate::agent::AgentId::new(session_id, crate::id::generate_id());
+    let agent_id = crate::agent::AgentFrameId::new(session_id, crate::id::generate_id());
     let context = Context::from(vec![ContextEntry { role: Role::User, content }]);
 
     Ok(AgentFrame::new(AgentFrameArgs::builder().id(agent_id).model(expert.model_id).context(context).allowed_tools(expert.allowed_tools).build()))

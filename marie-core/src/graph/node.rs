@@ -9,12 +9,12 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    di::{Get, Resolve}, expert::{ExpertId, client::ExpertClient}, graph::{Goto, GraphFrameId, Halt, server::GraphServer}, id::ID, model::client::ModelClient, network::worker::client::WorkerClient, state::{State, StateTransaction}
+    bail, di::{Get, Resolve}, expert::{ExpertClient, ExpertId}, graph::{Goto, GraphFrameId, Halt, server::GraphServer}, id::ID, model::ModelClient, state::{State, StateTransaction}, worker::client::WorkerClient
 };
 
 pub type NodeName = String;
 
-pub type NodeExecutor<D>  = Arc<dyn Fn(NodeContext<D>, State) -> BoxFuture<'static, anyhow::Result<NodeOutcome>>>;
+pub type NodeExecutor<D>  = Arc<dyn Fn(NodeContext<D>, State) -> BoxFuture<'static, crate::Result<NodeOutcome>>>;
 pub type NodeFactory<D> = Arc<dyn Fn(Value) -> NodeExecutor<D>>; 
 
 pub struct NodeDefinition {
@@ -66,7 +66,7 @@ pub trait Nodable<D>: Sized + Clone + Send + Sync + 'static where Self: From<Sel
         self, 
         ctx: NodeContext<D>, 
         state: StateTransaction
-    ) -> anyhow::Result<NodeOutcome>;
+    ) -> crate::Result<NodeOutcome>;
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -84,12 +84,12 @@ impl<D> Nodable<D> for ExpertNode where D: Resolve<ExpertClient> + Get<WorkerCli
     type Parameters = ExpertId;
     const NAME: &str = "expert";
 
-    async fn execute(self, ctx: NodeContext<D>, state: StateTransaction) -> anyhow::Result<NodeOutcome>  {
+    async fn execute(self, ctx: NodeContext<D>, state: StateTransaction) -> crate::Result<NodeOutcome>  {
         let experts: ExpertClient = ctx.deps.resolve();
         let worker: WorkerClient = ctx.deps.get();
         let models: ModelClient = ctx.deps.resolve();
 
-        let expert = experts.get(self.0).await?;
+        let expert = experts.get(self.0).await?.ok_or_else(|| bail!("missing expert {}", self.0))?;
         let model = models.get(expert.model_id).await?;
         
 

@@ -1,12 +1,8 @@
-mod protocol;
 #[cfg(feature="postgres")]
 pub mod postgres;
-pub mod client;
 
+use std::sync::Arc;
 use async_trait::async_trait;
-
-pub use client::SessionStoreClient;
-
 use crate::session::{Session, SessionId};
 
 /// Stockage CRUD d'une [`Session`] complète (voir `session::model::Session`)
@@ -22,11 +18,32 @@ use crate::session::{Session, SessionId};
 /// `Session::created_at` qu'à la création et de ne jamais y retoucher lors
 /// d'un remplacement — voir la doc de ces deux champs.
 #[async_trait]
-pub trait SessionStore: Send + Sync + Clone {
-    async fn get(self, id: SessionId) -> anyhow::Result<Option<Session>>;
-    async fn insert(mut self, session: Session) -> anyhow::Result<()>;
-    async fn replace(mut self, session: Session) -> anyhow::Result<()>;
-    async fn delete(mut self, id: SessionId) -> anyhow::Result<()>;
-    async fn list(self) -> anyhow::Result<Vec<Session>>;
+pub trait SessionStorable: Send + Sync + 'static {
+    async fn get(&self, id: SessionId) -> crate::Result<Option<Session>>;
+    async fn insert(&self, session: Session) -> crate::Result<()>;
+    async fn replace(&self, session: Session) -> crate::Result<()>;
+    async fn delete(&self, id: SessionId) -> crate::Result<()>;
+    async fn list(&self) -> crate::Result<Vec<Session>>;
 }
 
+#[derive(Clone)]
+pub struct SessionStore(Arc<dyn SessionStorable>);
+
+#[async_trait]
+impl SessionStorable for SessionStore {
+    async fn get(&self, id: SessionId) -> crate::Result<Option<Session>> {
+        self.0.get(id).await
+    }
+    async fn insert(&self, session: Session) -> crate::Result<()> {
+        self.0.insert(session).await
+    }
+    async fn replace(&self, session: Session) -> crate::Result<()> {
+        self.0.replace(session).await
+    }
+    async fn delete(&self, id: SessionId) -> crate::Result<()> {
+        self.0.delete(id).await
+    }
+    async fn list(&self) -> crate::Result<Vec<Session>> {
+        self.0.list().await
+    }
+}

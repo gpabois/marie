@@ -18,7 +18,7 @@ fn encode(workspace: &YrsWorkspace) -> Vec<u8> {
     workspace.diff_since(&StateVector::default())
 }
 
-fn decode(bytes: &[u8]) -> anyhow::Result<YrsWorkspace> {
+fn decode(bytes: &[u8]) -> crate::Result<YrsWorkspace> {
     YrsWorkspace::from_diff(bytes)
 }
 
@@ -31,15 +31,15 @@ fn decode(bytes: &[u8]) -> anyhow::Result<YrsWorkspace> {
 /// de l'implémentation directe, sans trait CRUD générique).
 #[async_trait::async_trait]
 pub trait WorkspaceStore: Send + Sync {
-    async fn get(&self, id: &WorkspaceId) -> anyhow::Result<Option<YrsWorkspace>>;
-    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> anyhow::Result<()>;
-    async fn delete(&self, id: &WorkspaceId) -> anyhow::Result<()>;
+    async fn get(&self, id: &WorkspaceId) -> crate::Result<Option<YrsWorkspace>>;
+    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> crate::Result<()>;
+    async fn delete(&self, id: &WorkspaceId) -> crate::Result<()>;
     /// Tous les workspaces actuellement stockés.
-    async fn list(&self) -> anyhow::Result<Vec<YrsWorkspace>>;
+    async fn list(&self) -> crate::Result<Vec<YrsWorkspace>>;
 
     /// Diff du workspace depuis `state_vector`, ou `None` s'il est inconnu
     /// de ce nœud.
-    async fn diff_since(&self, workspace_id: WorkspaceId, state_vector: &StateVector) -> anyhow::Result<Option<Vec<u8>>> {
+    async fn diff_since(&self, workspace_id: WorkspaceId, state_vector: &StateVector) -> crate::Result<Option<Vec<u8>>> {
         let Some(workspace) = self.get(&workspace_id).await? else {
             return Ok(None);
         };
@@ -49,32 +49,32 @@ pub trait WorkspaceStore: Send + Sync {
 
 #[async_trait::async_trait]
 impl WorkspaceStore for RedbStore {
-    async fn get(&self, id: &WorkspaceId) -> anyhow::Result<Option<YrsWorkspace>> {
+    async fn get(&self, id: &WorkspaceId) -> crate::Result<Option<YrsWorkspace>> {
         self.get_raw(NAMESPACE, &id.to_string()).await?.as_deref().map(decode).transpose()
     }
 
-    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> anyhow::Result<()> {
+    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> crate::Result<()> {
         self.put_raw(NAMESPACE, &id.to_string(), encode(value)).await
     }
 
-    async fn delete(&self, id: &WorkspaceId) -> anyhow::Result<()> {
+    async fn delete(&self, id: &WorkspaceId) -> crate::Result<()> {
         self.delete_raw(NAMESPACE, &id.to_string()).await
     }
 
-    async fn list(&self) -> anyhow::Result<Vec<YrsWorkspace>> {
+    async fn list(&self) -> crate::Result<Vec<YrsWorkspace>> {
         self.list_raw(NAMESPACE).await?.iter().map(|bytes| decode(bytes)).collect()
     }
 }
 
 #[async_trait::async_trait]
 impl WorkspaceStore for PostgresStore {
-    async fn get(&self, id: &WorkspaceId) -> anyhow::Result<Option<YrsWorkspace>> {
+    async fn get(&self, id: &WorkspaceId) -> crate::Result<Option<YrsWorkspace>> {
         let id = id.to_string();
         let row = sqlx::query("SELECT value FROM workspace WHERE id = $1").bind(&id).fetch_optional(self.pool()).await?;
         row.map(|row| decode(&row.get::<Vec<u8>, _>("value"))).transpose()
     }
 
-    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> anyhow::Result<()> {
+    async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> crate::Result<()> {
         let id = id.to_string();
         let bytes = encode(value);
         sqlx::query("INSERT INTO workspace (id, value) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET value = EXCLUDED.value")
@@ -85,13 +85,13 @@ impl WorkspaceStore for PostgresStore {
         Ok(())
     }
 
-    async fn delete(&self, id: &WorkspaceId) -> anyhow::Result<()> {
+    async fn delete(&self, id: &WorkspaceId) -> crate::Result<()> {
         let id = id.to_string();
         sqlx::query("DELETE FROM workspace WHERE id = $1").bind(&id).execute(self.pool()).await?;
         Ok(())
     }
 
-    async fn list(&self) -> anyhow::Result<Vec<YrsWorkspace>> {
+    async fn list(&self) -> crate::Result<Vec<YrsWorkspace>> {
         let rows = sqlx::query("SELECT value FROM workspace").fetch_all(self.pool()).await?;
         rows.iter().map(|row| decode(&row.get::<Vec<u8>, _>("value"))).collect()
     }
@@ -114,21 +114,21 @@ mod tests {
 
     #[async_trait::async_trait]
     impl WorkspaceStore for MemoryStore {
-        async fn get(&self, id: &WorkspaceId) -> anyhow::Result<Option<YrsWorkspace>> {
+        async fn get(&self, id: &WorkspaceId) -> crate::Result<Option<YrsWorkspace>> {
             self.0.lock().unwrap().get(id).map(|bytes| decode(bytes)).transpose()
         }
 
-        async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> anyhow::Result<()> {
+        async fn put(&self, id: &WorkspaceId, value: &YrsWorkspace) -> crate::Result<()> {
             self.0.lock().unwrap().insert(*id, encode(value));
             Ok(())
         }
 
-        async fn delete(&self, id: &WorkspaceId) -> anyhow::Result<()> {
+        async fn delete(&self, id: &WorkspaceId) -> crate::Result<()> {
             self.0.lock().unwrap().remove(id);
             Ok(())
         }
 
-        async fn list(&self) -> anyhow::Result<Vec<YrsWorkspace>> {
+        async fn list(&self) -> crate::Result<Vec<YrsWorkspace>> {
             self.0.lock().unwrap().values().map(|bytes| decode(bytes)).collect()
         }
     }

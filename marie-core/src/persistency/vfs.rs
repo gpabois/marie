@@ -38,7 +38,7 @@ impl WorkspaceVfs {
     }
 
     /// VFS d'un workspace seul (`/var`, `/files`) — sans `/session`.
-    pub async fn vfs(&self, workspace_id: WorkspaceId) -> anyhow::Result<Arc<VFS>> {
+    pub async fn vfs(&self, workspace_id: WorkspaceId) -> crate::Result<Arc<VFS>> {
         let aliases = Arc::new(PostgresAliasCatalog::for_workspace(self.pool.clone(), workspace_id));
         let vfs = Arc::new(VFS::with_aliases(aliases));
 
@@ -58,7 +58,7 @@ impl WorkspaceVfs {
     /// sous-arbre de celui de ce workspace (voir
     /// [`PostgresInodeCatalog::for_session`]). `var` est fourni par
     /// l'appelant (voir la doc de [`Self`]).
-    pub async fn session_vfs(&self, workspace_id: WorkspaceId, session_id: SessionId, var: Arc<dyn VarStore>) -> anyhow::Result<Arc<VFS>> {
+    pub async fn session_vfs(&self, workspace_id: WorkspaceId, session_id: SessionId, var: Arc<dyn VarStore>) -> crate::Result<Arc<VFS>> {
         let aliases = Arc::new(PostgresAliasCatalog::for_session(self.pool.clone(), session_id));
         let vfs = Arc::new(VFS::with_aliases(aliases));
         vfs.mount("/var", Arc::new(VarFileSystem::new(var))).await;
@@ -72,7 +72,7 @@ impl WorkspaceVfs {
     /// VFS complet d'une session : celui de son workspace (voir
     /// [`Self::vfs`]), avec `/session` monté par-dessus (voir
     /// [`Self::session_vfs`]).
-    pub async fn mount_session(&self, workspace_id: WorkspaceId, session_id: SessionId, var: Arc<dyn VarStore>) -> anyhow::Result<Arc<VFS>> {
+    pub async fn mount_session(&self, workspace_id: WorkspaceId, session_id: SessionId, var: Arc<dyn VarStore>) -> crate::Result<Arc<VFS>> {
         let vfs = self.vfs(workspace_id).await?;
         let session_vfs = self.session_vfs(workspace_id, session_id, var).await?;
         vfs.mount("/session", session_vfs).await;
@@ -85,7 +85,7 @@ impl WorkspaceVfs {
     /// `RpcCall::DELETE_SESSION` (`network::persistency`), qui n'a pas de VFS
     /// de session déjà monté pour passer par `FileSystem::remove`. Sans
     /// effet si la session n'a pas de fichiers (jamais écrit, ou déjà purgée).
-    pub async fn delete_session_files(&self, workspace_id: WorkspaceId, session_id: SessionId) -> anyhow::Result<()> {
+    pub async fn delete_session_files(&self, workspace_id: WorkspaceId, session_id: SessionId) -> crate::Result<()> {
         let catalog = PostgresInodeCatalog::for_session(self.pool.clone(), workspace_id, session_id).await?;
         let object_keys = catalog.remove("/").await?;
         for object_key in object_keys {

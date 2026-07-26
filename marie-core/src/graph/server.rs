@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc};
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 
-use crate::{di::{Factory, Get, Resolve}, expert::client::ExpertClient, graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, model::client::ModelClient, network::worker::client::WorkerClient};
+use crate::{di::{Factory, Get, Resolve}, expert::ExpertClient, graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, model::ModelClient, worker::client::WorkerClient};
 
 
 #[derive(Clone)]
