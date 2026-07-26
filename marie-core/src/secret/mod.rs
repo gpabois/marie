@@ -11,7 +11,7 @@ use sha2::Sha256;
 use thiserror::Error;
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::node::NodeId;
+use crate::{node::NodeId, secret::vault::Vault};
 
 
 pub type SecretResult<T> = Result<T, SecretError>;
@@ -32,14 +32,6 @@ pub type KeyEpoch = u32;
 pub const DEFAULT_EPOCH: KeyEpoch = 0;
 
 type HmacSha256 = Hmac<Sha256>;
-
-pub trait Encryptable : Sized {
-    type Encrypted;
-
-    fn encrypt<C>(self, codec: &C) -> SecretResult<Self::Encrypted> where C: SecretCodec;
-    fn decrypt<C>(encrypted: Self::Encrypted, codec: &C) -> SecretResult<Self> where C: SecretCodec;
-}
-
 
 pub trait SecretCodec {
     fn encrypt(&self, key: impl AsRef<[u8]>) -> SecretResult<EncryptedSecret>;

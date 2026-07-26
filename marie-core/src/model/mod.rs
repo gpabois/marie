@@ -9,7 +9,7 @@ use futures::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{agent::AgentFrameId, rpc::RpcError, secret::SecretError, tools::{ToolDefinition as MarieTool, ToolCall, ToolCallId}};
+use crate::{agent::AgentFrameId, rpc::RpcError, secret::{SecretError, vault::Vault}, tools::{ToolCall, ToolCallId, ToolDefinition as MarieTool}};
 
 pub mod catalog;
 pub mod model;
@@ -21,12 +21,16 @@ pub use server::ModelServer;
 
 pub mod rpc;
 
-pub use model::{ModelId, Model, EncryptedModel};
+pub use model::{ModelId, Model};
 pub use client::ModelClient;
 pub use rpc::{GetModel, InsertModel, ListModel, RemoveModel, UpdateModel};
 
 pub const NS_MODEL: &str = "/marie/ns/models";
 
+#[derive(Clone)]
+pub struct Models {
+    vault: Vault
+}
 
 #[derive(Debug, Error)]
 pub enum ModelError {

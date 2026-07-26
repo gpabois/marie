@@ -1,51 +1,14 @@
-use std::{fmt, str::FromStr};
 
 use async_trait::async_trait;
-use bytemuck::{Pod, Zeroable};
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 #[cfg(feature = "catalog")]
 use sqlx::Row as _;
 #[cfg(feature = "catalog")]
 use sqlx::postgres::PgRow;
 
-use crate::{id::ID, secret::{EncryptedSecret, KeyEpoch}};
+use crate::secret::{EncryptedSecret, KeyEpoch, vault::SecretRef};
 #[cfg(feature = "catalog")]
 use crate::store::PgStore;
 
-/// Référence opaque vers un secret stocké (voir [`StoredSecret`]) — un simple
-/// alias sur [`ID`], sur le même principe que `session::SessionId`/
-/// `workspace::WorkspaceId`.
-#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
-#[repr(C)]
-pub struct SecretRef(pub(crate) ID);
-
-impl SecretRef {
-    #[must_use]
-    pub fn new(id: ID) -> Self {
-        Self(id)
-    }
-}
-
-impl fmt::Display for SecretRef {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl FromStr for SecretRef {
-    type Err = crate::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.parse()?))
-    }
-}
-
-impl From<ID> for SecretRef {
-    fn from(id: ID) -> Self {
-        Self(id)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct StoredSecret {

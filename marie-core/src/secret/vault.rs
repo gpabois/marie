@@ -1,6 +1,52 @@
+use std::{fmt, str::FromStr};
+
+use bytemuck::{Pod, Zeroable};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{id::{self}, secret::{EncryptedSecret, SecretCodec, SecretError, SecretManager, store::{SecretRef, SecretStore as _, StoredSecret}}, store::PgStore};
+use crate::{id::{self, ID}, secret::{EncryptedSecret, SecretCodec, SecretError, SecretManager, store::{SecretStore as _, StoredSecret}}, store::PgStore};
+
+/// Référence opaque vers un secret stocké (voir [`StoredSecret`]) — un simple
+/// alias sur [`ID`], sur le même principe que `session::SessionId`/
+/// `workspace::WorkspaceId`.
+#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
+#[repr(C)]
+pub struct SecretRef(pub(crate) ID);
+
+impl SecretRef {
+    pub async fn decrypt_str(self, namespace: &str, vault: &Vault) -> Result<Option<String>, VaultError> {
+        vault.get_decrypted_str(self, namespace).await
+    }
+}
+
+impl SecretRef {
+    #[must_use]
+    pub fn new(id: ID) -> Self {
+        Self(id)
+    }
+}
+
+impl fmt::Display for SecretRef {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&self.0, f)
+    }
+}
+
+impl FromStr for SecretRef {
+    type Err = crate::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        Ok(Self(s.parse()?))
+    }
+}
+
+impl From<ID> for SecretRef {
+    fn from(id: ID) -> Self {
+        Self(id)
+    }
+}
+
 
 #[derive(Debug, Error)]
 pub enum VaultError {

@@ -4,7 +4,6 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::secret::store::SecretRef;
-use crate::secret::{Encryptable, EncryptedSecret, SecretCodec, SecretResult};
 
 /// Identifiant unique d'un modèle dans le [`ModelCatalog`](crate::model::catalog::ModelCatalog).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -68,78 +67,11 @@ pub enum Model {
         id: String,
         base_url: String,
         client_id: String,
-        api_key: String,
+        api_key: SecretRef,
         model: String,
         /// Prompt système appliqué par défaut à tout agent utilisant ce modèle.
         /// `None` si le modèle n'en définit pas (l'appelant fournit alors son
         /// propre contexte système, voir [`crate::agent::context::Context`]).
         system_prompt: Option<String>,
     },
-}
-
-impl Encryptable for Model {
-    type Encrypted = EncryptedModel;
-
-    fn encrypt<C>(self, codec: &C) -> SecretResult<Self::Encrypted> where C: SecretCodec {
-        Ok(match self {
-            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, api_key } => {
-                EncryptedModel::OpenAICompatible { id, base_url, client_id, api_key: codec.encrypt_str(api_key)?, model, system_prompt }
-            }
-        })
-    }
-
-    fn decrypt<C>(encrypted: Self::Encrypted, codec: &C) -> crate::secret::SecretResult<Self> where C: crate::secret::SecretCodec {
-        Ok(match encrypted {
-            EncryptedModel::OpenAICompatible { id, base_url, client_id, api_key, model, system_prompt } => {
-                Model::OpenAICompatible { id, base_url, client_id, api_key: codec.decrypt_str(api_key)?, model, system_prompt }
-            },
-        })
-    }
-}
-
-impl Model {
-    pub fn id(&self) -> &str {
-        match self {
-            Model::OpenAICompatible { id, .. } => id.as_str(),
-        }
-    }
-}
-
-/// Représentation d'un [`Model`] telle qu'elle transite entre le control
-/// plane et un nœud consommateur (voir `RpcCall::GET_MODEL`) : la clé API n'y
-/// est jamais en clair, seulement chiffrée pour le nœud destinataire (voir
-/// `SecretManager::derive_node_key` côté control plane et
-/// `NetworkClient::decrypt_secret` côté consommateur).
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum EncryptedModel {
-    OpenAICompatible {
-        id: String,
-        base_url: String,
-        client_id: String,
-        api_key: SecretRef,
-        model: String,
-        system_prompt: Option<String>,
-    },
-}
-
-impl EncryptedModel {
-    /// Clé API chiffrée de ce modèle, voir [`Self::into_model`].
-    #[must_use]
-    pub fn api_key(&self) -> &EncryptedSecret {
-        match self {
-            Self::OpenAICompatible { api_key, .. } => api_key,
-        }
-    }
-
-    /// Reconstitue la déclaration en clair une fois `api_key` déchiffrée
-    /// localement (voir `NetworkClient::decrypt_secret` ou
-    /// `model::catalog::store::decrypt_from_storage`).
-    #[must_use]
-    pub fn decrypt(self, api_key: String) -> Model {
-        match self {
-            Self::OpenAICompatible { id, base_url, client_id, model, system_prompt, .. } => {
-                Model::OpenAICompatible { id, base_url, client_id, api_key, model, system_prompt }
-            }
-        }
-    }
 }
