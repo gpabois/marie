@@ -6,7 +6,7 @@ use crate::network::{Network, protocol::NetworkEvent};
 pub trait Event: DeserializeOwned + Serialize + Clone + Send + 'static {
     const TOPIC: &str;
 
-    fn id(&self) -> &str;
+    fn id(&self) -> String;
     fn topics(&self) -> Vec<String>;
 }
 

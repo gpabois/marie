@@ -1,19 +1,18 @@
-use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
-use crate::events::Event;
+use crate::{events::Event, node::NodeId};
 
 #[derive(Clone, Serialize, Deserialize)]
 pub enum AnnuaryEvent {
-    NodeConnected(PeerId),
-    NodeDisconnected(PeerId)
+    NodeConnected(NodeId),
+    NodeDisconnected(NodeId)
 }
 
 impl Event for AnnuaryEvent {
     const TOPIC: &str = "/marie/annuary";
 
-    fn id(&self) -> &str {
-        ""
+    fn id(&self) -> String {
+        String::default()
     }
 
     fn topics(&self) -> Vec<String> {

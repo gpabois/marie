@@ -27,6 +27,12 @@ impl From<Capability> for u8 {
 #[derive(Default, Clone, Copy, Serialize, Deserialize)]
 pub struct Capabilities(u8);
 
+impl From<Capability> for Capabilities {
+    fn from(value: Capability) -> Self {
+        Self(value.into())
+    }
+}
+
 impl Capabilities {
     pub fn includes(&self, capabilites: Capabilities) -> bool {
         self.0 & capabilites.0 == capabilites.0

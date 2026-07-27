@@ -1,44 +1,42 @@
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 
-use crate::{job::{JobId, JobState}, events::EventEnvelope, worker::{JobResult, WorkerError}};
+use crate::{events::{Event, EventEnvelope}, node::NodeId, job::{JobId, JobState}, worker::WorkerError};
 
-#[derive(Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub enum WorkerEvent {
-    JobDone {
-        id: JobId,
-        result: JobResult
-    },
-    JobStateUpdate {
+    JobUpdate {
         id: JobId,
         state: JobState
     }
 }
 
-impl TryFrom<EventEnvelope> for WorkerEvent {
-    type Error = WorkerError;
+impl Event for WorkerEvent {
+    const TOPIC: &str = "/marie/workers/events";
 
-    fn try_from(value: EventEnvelope) -> Result<Self, Self::Error> {
-        use WorkerError::NotWorkerEvent;
-
-        if !Self::is(&value) { return Err(NotWorkerEvent) };
-
-        serde_json::from_slice(&value.payload).map_err(|_| NotWorkerEvent)
-    }
-}
-
-impl WorkerEvent {
-    pub fn is(msg:& EventEnvelope) -> bool {
-        msg.topic.starts_with(Self::TOPIC_PREFIX)
-    }
-}
-
-impl WorkerEvent {
-    pub const TOPIC_PREFIX: &str = "marie/workers/events";
-
-    pub fn topic(&self) -> String {
+    fn id(&self) -> String {
         match self {
-            WorkerEvent::JobDone { .. } => format!("{0}/job-done", Self::TOPIC_PREFIX),
-            WorkerEvent::JobStateUpdate { .. } => format!("{0}/job-state-update", Self::TOPIC_PREFIX),
+            WorkerEvent::JobUpdate { id, .. } => id.to_string()
         }
     }
+
+    fn topics(&self) -> Vec<String> {
+        vec![<Self as Event>::TOPIC.to_string()]
+    }
+}
+
+pub enum WorkMessage {
+    Ack(JobAck)
+}
+
+impl From<JobAck> for WorkMessage {
+    fn from(value: JobAck) -> Self {
+        WorkMessage::Ack(value)
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct JobAck {
+    pub worker_id: NodeId,
+    pub job_id: JobId
 }

@@ -10,21 +10,17 @@ use crate::{
         status::AgentResponse,
     },
     hitl::Question,
-    model::{self, Model, ModelResponse, ModelStatus, ModelClient},
-    network::bootstrap::BootstrapClient,
-    rpc::{RpcClient, Void},
-    session::{SessionLogId, client::SessionClient},
-    state_graph::{hitl::HitlFrameId, orchestration::Waiter},
-    tools::{ToolDefinition, ToolCall, ToolCallId, builtin::ASK_USER_INPUT_TOOL, client::ToolClient},
+    model::Models
 };
 
 
 core_job! {
     #[job(name="/marie/sessions/run-agent")]
     pub async fn run_agent(
-        self: Self<{models: ModelClient, tools: ToolClient, sessions: SessionClient}>,
+        self: Self<{models: Models, tools: ToolClient, sessions: SessionClient}>,
         frame: AgentFrame
     ) -> Void {
+        
         let tools: Vec<ToolDefinition> = self.tools
             .list()
             .await?
@@ -92,7 +88,7 @@ enum TurnOutcome {
 /// du flux (`ModelStreamEvent::Completed`/`Failed`).
 async fn run_turns(
     agent_id: AgentFrameId,
-    model: Model,
+    model: EncryptedModel,
     tools: &[ToolDefinition],
     mut context: Context,
     sessions: &SessionClient,

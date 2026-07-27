@@ -14,11 +14,6 @@ use crate::{id::{self, ID}, secret::{EncryptedSecret, SecretCodec, SecretError, 
 #[repr(C)]
 pub struct SecretRef(pub(crate) ID);
 
-impl SecretRef {
-    pub async fn decrypt_str(self, namespace: &str, vault: &Vault) -> Result<Option<String>, VaultError> {
-        vault.get_decrypted_str(self, namespace).await
-    }
-}
 
 impl SecretRef {
     #[must_use]
@@ -53,7 +48,9 @@ pub enum VaultError {
     #[error("erreur lors des opérations de stockage du coffre-fort : {0}")]
     StorageError(#[from] sqlx::Error),
     #[error("erreur lors des opérations de chiffrement/déchiffrement du coffre-fort: {0}")]
-    SecretError(#[from] SecretError)
+    SecretError(#[from] SecretError),
+    #[error("le secret référencé n'existe pas ou plus : {0}")]
+    UnknownSecret(SecretRef)
 }
 
 #[derive(Clone)]
@@ -97,15 +94,25 @@ impl Vault {
         Ok(())
     }
 
-    pub async fn get_decrypted(&self, id: SecretRef, namespace: &str) -> Result<Option<Vec<u8>>, VaultError> {
-        let Some(secret) = self.store.get_secret(&id).await? else { return Ok(None) };
-        let key = self.secrets.derive_key(secret.key_epoch, namespace.as_bytes())?;
-        let secret = key.decrypt(EncryptedSecret::from(secret))?;
-        Ok(Some(secret))
+    /// Supprime définitivement un secret (voir
+    /// [`SecretStore::remove_secret`]) — contrairement au catalogue
+    /// applicatif ([`crate::catalog::Catalog::delete`]), pas de soft-delete
+    /// ici : un secret laissé en base après que son détenteur (ex: un
+    /// `Model`) a été supprimé n'a plus aucun usage légitime.
+    pub async fn remove(&self, id: SecretRef) -> Result<(), VaultError> {
+        self.store.remove_secret(&id).await?;
+        Ok(())
     }
 
-    pub async fn get_decrypted_str(&self, id: SecretRef, namespace: &str) -> Result<Option<String>, VaultError> {
-        let Some(raw) = self.get_decrypted(id, namespace).await? else { return Ok(None) };
-        Ok(Some(String::from_utf8(raw).unwrap()))
+    pub async fn get_decrypted(&self, id: SecretRef, namespace: &str) -> Result<Vec<u8>, VaultError> {
+        let Some(secret) = self.store.get_secret(&id).await? else { return Err(VaultError::UnknownSecret(id)) };
+        let key = self.secrets.derive_key(secret.key_epoch, namespace.as_bytes())?;
+        let secret = key.decrypt(EncryptedSecret::from(secret))?;
+        Ok(secret)
+    }
+
+    pub async fn get_decrypted_str(&self, id: SecretRef, namespace: &str) -> Result<String, VaultError> {
+        let raw = self.get_decrypted(id, namespace).await?;
+        Ok(String::from_utf8(raw).unwrap())
     }
 }

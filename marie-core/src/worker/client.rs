@@ -1,196 +1,222 @@
-use std::{collections::HashMap, sync::{Arc, Weak}};
+use std::{collections::HashMap, sync::Arc};
 
+use chrono::{Duration, Utc};
 use futures::StreamExt;
 use parking_lot::Mutex;
-use tokio::{select, sync::{self, mpsc, watch}};
+use tokio::{select, sync};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    _annuary::Annuary, di::{Factory, Get}, id, job::{Job, JobId, JobInstance, JobState}, layer::{Layer, LayerExt as _}, network::{Network, bootstrap::{self, BootstrapClient}}, events::layers::EventLayer, rpc::{RpcClient, Void, client::RpcCallArgs}, worker::{NS_WORKER_WATCHDOG, RPC_WATCH_JOB, WorkerError, WorkerEvent, layers::WorkerEventLayer}
+    annuary::{Annuary, capabilities::Capability}, events::EventService, node::NodeId, id, job::{Job, JobId, JobInstance, JobState}, rpc::RpcClient, stream::{DynamicStreamPool, StreamHandle}, worker::{ WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
 };
 
-type JobTrackers = Arc<Mutex<HashMap<JobId, TrackedJobInfo>>>;
 
 #[derive(TypedBuilder)]
 pub struct WorkerClientArgs {
     rpc: RpcClient,
+    events: EventService,
     annuary: Annuary
 }
 
+#[derive(Clone)]
+enum TimerEvent {
+    ProbingTimeOut(JobId),
+    AckTimeOut(JobId),
+    Probe(JobId)
+}
 
 #[derive(Clone)]
 pub struct WorkerClient {
     rpc: RpcClient,
+    events: EventService,
     annuary: Annuary,
-    trackers: Arc<Mutex<HashMap<JobId, TrackedJobInfo>>>,
-    cmd_tx: mpsc::UnboundedSender<Command>
-}
-
-impl<C> Factory<C> for WorkerClient where C: Get<Network> + Get<Annuary> + Get<RpcClient> {
-    fn create(container: &C) -> Self {
-        let network: Network = container.get();
-        
-        let args = WorkerClientArgs::builder()
-            .rpc(container.get())
-            .annuary(container.get())
-            .build();
-
-        Actor::create(
-            network
-                .layer()
-                .chain::<EventLayer, _>(())
-                .chain::<WorkerEventLayer, _>(()),
-            args
-        )
-    }
+    trackers: Arc<Mutex<HashMap<JobId, JobInfo>>>,
+    jobs_timers: StreamHandle<TimerEvent>,
 }
 
 impl WorkerClient {
-    /// Track a job in the cluster
-    pub async fn track(&mut self, job_id: JobId) -> Result<JobTracker, WorkerError> {
-        use Command::Track;
-
-        let guard = self.trackers.lock();
-        if let Some(infos) = guard.get(&job_id) 
-            && let Some(keeper) = infos.keeper.upgrade() {
-            
-            return Ok(JobTracker {
-                job_id,
-                listener: infos.listeners.clone(),
-                keeper
-            });
-        }
-        drop(guard);
-
-        let (tx, rx) = watch::channel(JobState::Unknown);
-        let keeper = Arc::new(TrackerKeeper(job_id, self.trackers.clone()));
-
-        let tracker = JobTracker {
-            job_id,
-            listener: rx.clone(),
-            keeper: keeper.clone()
-        };
-        
-        let info = TrackedJobInfo {
-            job_id,
-            state: JobState::Unknown,
-            listeners: rx.clone(),
-            subscribers: tx,
-            keeper: Arc::downgrade(&keeper),
+    pub fn new(args: WorkerClientArgs) -> Self {
+        let pool = DynamicStreamPool::<TimerEvent>::new(300);
+        let jobs_timers = pool.handle();
+        let client = WorkerClient {
+            rpc: args.rpc,
+            annuary: args.annuary,
+            events: args.events,
+            trackers: Arc::new(Mutex::new(HashMap::default())),
+            jobs_timers
         };
 
-        let _ = self.cmd_tx.send(Track(info));
-        
-        Ok(tracker)
+        tokio::spawn(client.clone().run(pool));
+
+        client
     }
 
     /// Spawn a new job in the cluster. Générique sur [`Job`] — sur le même
     /// modèle que [`crate::rpc::RpcClient::invoke`] — pour que `J::NAME` soit
     /// la seule source de vérité du nom envoyé au worker, sans risque de
     /// diverger d'une constante dupliquée côté appelant.
-    pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobId, WorkerError> {
+    pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobHandle, WorkerError> {
         let id = id::generate_id();
 
-        let job = JobInstance {
+        let instance = JobInstance {
             id,
             name: J::NAME.to_string(),
             args: serde_json::to_value(args.into()).unwrap(),
         };
 
-        super::watchdog::watch_job(job, self.bootstrap.clone(), self.rpc.clone()).await?;
+        let worker = self.annuary.pick_top_n(id, Capability::Worker, 3).pop_front().ok_or_else(|| WorkerError::NoWorkerAvailable)?;
+        
+        let handle = self.watch(id, JobState::PendingScheduling { instance, worker });
 
-        Ok(id)
+        Ok(handle)
     }
-}
 
-pub struct Actor;
 
-struct TrackedJobInfo {
-    job_id: JobId,
-    state: JobState,
-    listeners: watch::Receiver<JobState>,
-    subscribers: watch::Sender<JobState>,
-    keeper: Weak<TrackerKeeper>
-}
+    async fn run(self, mut timers: DynamicStreamPool<TimerEvent>) {
+        let mut rx = self.events.stream_events("/marie/workers/events");
 
-impl Actor {
-    pub fn create(
-        layer: impl Layer<Send = WorkerEvent, Received = WorkerEvent>,
-        args: WorkerClientArgs
-    ) -> WorkerClient {
-        let (_, mut rx) = layer.boxed_split();
-
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded_channel::<Command>();
-        let tracks: Arc<Mutex<HashMap<JobId, TrackedJobInfo>>> = Arc::new(Mutex::new(HashMap::default()));
-
-        let trackers = tracks.clone();
-        let rpc = args.rpc.clone();
-        let annuary = args.annuary.clone();
-        tokio::spawn(async move {
-            loop {
-                select! { 
-                    Some(event) = rx.next() => {
-                        match event {
-                            WorkerEvent::JobStateUpdate { id: job_id, state } => {
-                                update_job_state(trackers.clone(), job_id, state);
-                            },
-                            _ => {}
-                        }
-                    },
-                    Some(cmd) = cmd_rx.recv() => {
-                        match cmd {
-                            Command::Track(tracked_job_info) => {
-                                let job_id = tracked_job_info.job_id;
-                                let task = super::watchdog::get_job_state(tracked_job_info.job_id, annuary.clone(), rpc.clone());
-                                trackers.lock().insert(tracked_job_info.job_id, tracked_job_info);
-
-                                let trackers = trackers.clone();
-                                tokio::spawn(async move {
-                                    if let Ok(Some(state)) = task.await {
-                                        update_job_state(trackers.clone(), job_id, state)
-                                    }
-                                });
-                            },
+        loop {
+            select! {
+                Some(event) = rx.next() => {
+                    match event {
+                        WorkerEvent::JobUpdate {id, state} => {
+                            self.handle_job_state(id, state);
                         }
                     }
+                },
+                Some(timer_event) = timers.next() => self.handle_timer_event(timer_event)
+            }
+        }
+    }
+
+    fn handle_timer_event(&self, event: TimerEvent) {
+        use JobState::{Failed, Probing, Running, Scheduled};
+
+        match event {
+            TimerEvent::ProbingTimeOut(id) => {
+                let Some(state) = self.trackers.lock().get(&id).map(|tracker| tracker.state.clone()) else { return };
+
+                if state.is_probing() {
+                    self.handle_job_state(id, Failed { error: WorkerError::ProbingTimeOut });
+                }
+            },
+            TimerEvent::Probe(id) => {
+                let Some(state) = self.trackers.lock().get(&id).map(|tracker| tracker.state.clone()) else { return };
+
+                match state {
+                    Running { worker } | Scheduled { worker } => {
+                        self.handle_job_state(id, Probing { worker });
+                    },
+                    _ => {}
+                }
+            },
+            TimerEvent::AckTimeOut(id) => {
+                let Some(state) = self.trackers.lock().get(&id).map(|tracker| tracker.state.clone()) else { return };
+                if state.is_pending_ack() {
+                    self.handle_job_state(id, Failed { error: WorkerError::AckTimeOut });
                 }
             }
+        }
+    }
 
-        });
+    fn handle_job_state(&self, id: JobId, state: JobState) {
+        use JobState::{PendingAck, Probing, Scheduled, Running, PendingScheduling};
 
-        WorkerClient {
-            rpc: args.rpc.clone(),
-            annuary: args.annuary.clone(),
-            trackers: tracks.clone(),
-            cmd_tx
+        {
+            let mut guard = self.trackers.lock();
+            let Some(tracker) = guard.get_mut(&id) else { return };
+            tracker.state = state.clone();
+            tracker.listeners
+                .iter()
+                .for_each(|listener| {
+                    listener.send(state.clone());
+                });
+        }
+
+        match state {
+            PendingScheduling { instance, worker } => {
+                tokio::spawn(self.clone().schedule_job(instance, worker));
+            },
+            PendingAck { .. } => {
+                self.jobs_timers.after(Duration::seconds(30), TimerEvent::AckTimeOut(id));
+            },
+            Probing { worker } => {
+                tokio::spawn(self.clone().probe_state(id, worker));
+                self.jobs_timers.after(Duration::seconds(30), TimerEvent::ProbingTimeOut(id));
+            },
+            Scheduled { worker } | Running { worker } => {
+                tokio::spawn(self.clone().probe_state(id, worker.clone()));
+                self.jobs_timers.after(Duration::seconds(30), TimerEvent::Probe(id));
+            },
+            _ => {}
+        }
+    }
+
+    async fn schedule_job(self, instance: JobInstance, worker: NodeId) -> Result<(), WorkerError> {
+        use JobState::{PendingAck, Failed, Scheduled};
+        let id = instance.id;
+
+        self.handle_job_state(id, PendingAck { worker: worker.clone() });
+
+        match self.rpc.invoke::<ScheduleJob>(instance, [worker.clone()]).await {
+            Err(error) => self.handle_job_state(id, Failed { error: WorkerError::ScheduledError(error.to_string()) }),
+            Ok(Err(error)) => self.handle_job_state(id, Failed { error: error.into() }),
+            Ok(Ok(_)) => self.handle_job_state(id, Scheduled {worker})
+        };
+
+        Ok(())
+
+    }
+
+    /// Probe the state of the job in the worker.
+    async fn probe_state(self, id: JobId, worker: NodeId) -> Result<(), WorkerError> {
+
+        let Some(state) = self.trackers.lock().get(&id).map(|tracker| tracker.state.clone()) else { return Ok(()) };
+        
+        // pas besoin de probe si le travail est terminé.
+        if state.has_terminated() {
+            return Ok(());
+        }
+
+        self.handle_job_state(id, JobState::Probing { worker: worker.clone() });
+        let state = self.rpc.invoke::<GetJobState>(id, [worker]).await??;
+        self.handle_job_state(id, state);
+        Ok(())
+    }
+    
+}
+
+impl WorkerClient {
+    /// Track a job s
+    fn watch(&self, job_id: JobId, initial: JobState) -> JobHandle {        
+        let (tx, rx) = sync::watch::channel(JobState::Unknown);
+
+        let info = JobInfo {
+            id: job_id,
+            state: JobState::Unknown,
+            listeners: vec![tx],
+            check_at: Utc::now() + chrono::Duration::seconds(30),
+        };
+
+        self.trackers.lock().insert(job_id, info);
+        self.handle_job_state(job_id, initial);
+        
+        JobHandle {
+            job_id,
+            listener: rx
         }
     }
 }
 
-fn update_job_state(trackers: JobTrackers, job_id: JobId, state: JobState) {
-    if let Some(infos) = trackers.lock().get_mut(&job_id) {
-        infos.state = state.clone();
-        let _ = infos.subscribers.send(state);
-    }
-}
-
-/// Supprime le tracker en cas de drop.
-struct TrackerKeeper(JobId, Arc<Mutex<HashMap<JobId, TrackedJobInfo>>>);
-
-impl Drop for TrackerKeeper {
-    fn drop(&mut self) {
-        let mut guard = self.1.lock();
-        guard.remove(&self.0);
-    }
-}
-
-enum Command {
-    Track(TrackedJobInfo)
+struct JobInfo {
+    id: JobId,
+    state: JobState,
+    listeners: Vec<sync::watch::Sender<JobState>>,
+    check_at: chrono::DateTime<Utc>
 }
 
 #[derive(Clone)]
-pub struct JobTracker {
+pub struct JobHandle {
     job_id: JobId,
     listener: sync::watch::Receiver<JobState>,
-    keeper: Arc<TrackerKeeper>
 }

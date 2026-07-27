@@ -9,7 +9,6 @@
 -- filet de sécurité si une ligne était un jour insérée hors de ce chemin.
 CREATE TABLE IF NOT EXISTS marie_workspaces (
     id TEXT PRIMARY KEY,
-    state JSONB NOT NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );

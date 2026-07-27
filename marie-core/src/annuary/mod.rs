@@ -2,7 +2,7 @@ pub mod capabilities;
 pub mod protocol;
 pub(crate) mod rpc;
 
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::{HashMap, VecDeque}, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::stream::BoxStream;
@@ -12,11 +12,7 @@ use tokio::select;
 use tokio_stream::StreamExt;
 
 use crate::{
-    annuary::{capabilities::Capabilities, protocol::AnnuaryEvent, rpc::GetCapabilities},
-    events::EventService,
-    hrw,
-    network::protocol::NetworkEvent,
-    rpc::{RemoteProcedureCall, RpcClient, RpcServer, Void}
+    annuary::{capabilities::Capabilities, protocol::AnnuaryEvent, rpc::GetCapabilities}, events::EventService, hrw, network::protocol::NetworkEvent, node::NodeId, rpc::{RemoteProcedureCall, RpcClient, RpcServer, Void}
 };
 
 #[derive(Clone)]
@@ -24,15 +20,16 @@ pub struct Annuary {
     rpc_client: RpcClient,
     events: EventService,
     capabilities: Arc<Capabilities>,
-    peers: Arc<Mutex<HashMap<PeerId, PeerTracker>>>,
+    peers: Arc<Mutex<HashMap<NodeId, PeerTracker>>>,
 }
 
 impl Annuary {
-    pub fn pick_top_n(&self, id: impl AsRef<[u8]>, capabilities: Capabilities, n: usize) -> Vec<PeerId> {
-        let peers: Vec<PeerId> = self.peers.lock()
+    pub fn pick_top_n(&self, id: impl AsRef<[u8]>, capabilities: impl Into<Capabilities>, n: usize) -> VecDeque<NodeId> {
+        let capabilities: Capabilities = capabilities.into();
+        let peers: Vec<NodeId> = self.peers.lock()
             .iter()
             .filter(|(id, tracker)| tracker.capabilities.includes(capabilities))
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id.clone())
             .collect();
 
         hrw::pick_top_n(id.as_ref(), &peers, n).into_iter().cloned().collect()
@@ -43,11 +40,12 @@ impl Annuary {
     /// hachage cohérent) — utilisé pour calculer une composition de groupe
     /// complète, ex. les votants d'un groupe Raft (voir
     /// `lease::server::build_lease_authority`), pas juste "un pair pour X".
-    pub fn peers_with(&self, capabilities: Capabilities) -> Vec<PeerId> {
+    pub fn nodes_with(&self, capabilities: impl Into<Capabilities>) -> Vec<NodeId> {
+        let capabilities = capabilities.into();
         self.peers.lock()
             .iter()
             .filter(|(_, tracker)| tracker.capabilities.includes(capabilities))
-            .map(|(peer_id, _)| *peer_id)
+            .map(|(peer_id, _)| peer_id.clone())
             .collect()
     }
 }
@@ -95,35 +93,35 @@ impl Annuary {
 
     fn handle_event(&self, event: AnnuaryEvent) {
         match event {
-            AnnuaryEvent::NodeConnected(peer_id) => self.on_peer_connected(peer_id),
-            AnnuaryEvent::NodeDisconnected(peer_id) => self.on_peer_disconnected(peer_id),
+            AnnuaryEvent::NodeConnected(node_id) => self.on_node_connected(node_id),
+            AnnuaryEvent::NodeDisconnected(node_id) => self.on_node_disconnected(node_id),
         }
     }
 
     fn handle_network_event(&self, event: NetworkEvent) {
         match event {
-            NetworkEvent::PeerConnected { peer_id } => self.on_peer_connected(peer_id),
-            NetworkEvent::PeerDisconnected { peer_id } => self.on_peer_disconnected(peer_id),
+            NetworkEvent::NodeConnected { node_id } => self.on_node_connected(node_id),
+            NetworkEvent::NodeDisconnected { node_id } => self.on_node_disconnected(node_id),
             _ => {}
         }
     }
 
-    fn on_peer_connected(&self, peer_id: PeerId) {
+    fn on_node_connected(&self, node_id: NodeId) {
         let annuary = self.clone();
-        tokio::spawn(annuary.handle_peer_connection(peer_id));
+        tokio::spawn(annuary.handle_peer_connection(node_id));
     }
 
-    fn on_peer_disconnected(&self, peer_id: PeerId) {
-        self.peers.lock().remove(&peer_id);
+    fn on_node_disconnected(&self, node_id: NodeId) {
+        self.peers.lock().remove(&node_id);
     }
 
-    async fn handle_peer_connection(self, peer_id: PeerId) -> crate::Result<()> {
+    async fn handle_peer_connection(self, node_id: NodeId) -> crate::Result<()> {
         let capabilities = self.rpc_client.invoke::<GetCapabilities>(
             Void, 
-            [peer_id]
+            [node_id.clone()]
         ).await?;
         
-        self.peers.lock().entry(peer_id).or_insert_with(|| PeerTracker {
+        self.peers.lock().entry(node_id).or_insert_with(|| PeerTracker {
             peer_status: PeerStatus::Alive,
             capabilities,
             expires_at: Utc::now() + Duration::hours(2)

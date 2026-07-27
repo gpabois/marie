@@ -4,6 +4,7 @@ use std::fmt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
+use crate::catalog::Catalogable;
 use crate::model::ModelId;
 use crate::tools::ToolId;
 
@@ -65,4 +66,12 @@ pub struct Expert {
     pub prompt: String,
     pub model_id: ModelId,
     pub allowed_tools: Vec<ToolId>,
+}
+
+impl Catalogable for Expert {
+    const KIND: &str = "/marie/catalog/experts";
+
+    fn id(&self) -> &str {
+        self.id.borrow()
+    }
 }

@@ -1,133 +1,54 @@
-use std::{collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
+use std::{any::Any, collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use crate::{
-    job::JobInstance,
-    layer::Layer,
-    network::bootstrap::BootstrapClient,
-    worker::{NS_WORKER, RPC_SCHEDULE_JOB, WorkerEvent},
-    rpc::RpcServer,
-    sink::SinkBoxExt
+    events::EventService, 
+    job::{JobId, JobInstance, JobState}, 
+    node::LocalNodeId, rpc::{RemoteProcedureCall as _, RpcServer}, 
+    worker::{JobAck, WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
 };
-use futures::{FutureExt, SinkExt, StreamExt, channel::mpsc, future::BoxFuture};
-use libp2p::rendezvous::Namespace;
+use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
-use tokio::select;
 use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder)]
-pub struct WorkerServerArgs<'di, Di> {
-    container: &'di Di,
+pub struct WorkerArgs {
+    local_node_id: LocalNodeId,
+    rpc: RpcServer,
+    events: EventService
 }
 
 type JobExecutor = Arc<dyn (Fn(serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, crate::Error>>) + Send + Sync + 'static>;
 
-enum Command {
-    Register(String, JobExecutor)
-}
-
-pub struct WorkerServerActor;
-
-impl WorkerServerActor {
-    pub fn new(
-        layer: impl Layer<Send=WorkerEvent, Received = WorkerEvent>,
-        mut args: WorkerServerArgs,
-    ) -> WorkerServer {
-        args.bootstrap.register_to_namespaces([Namespace::from_static(NS_WORKER)]);
-
-        let (tx, rx) = layer.split();
-
-        let mut tx = tx.boxed_sink();
-        let _rx = rx.boxed();
-
-        let (event_tx, mut event_rx) = mpsc::unbounded::<WorkerEvent>();
-        let (cmd_tx, mut cmd_rx) = mpsc::unbounded::<Command>();
-
-        let executors: Arc<Mutex<HashMap<String, JobExecutor>>> = Default::default();
-        let execs = executors.clone();
-
-        tokio::spawn(async move {
-            use Command::Register;
-            loop {
-                select! {
-                    Ok(event_to_send) = event_rx.recv() => {
-                        let _ = tx.send(event_to_send);
-                    }
-                    Ok(cmd) = cmd_rx.recv() => {
-                        match cmd {
-                            Register(name, executor) => {
-                                let _ = executors.lock().insert(name, executor);
-                            }
-                        }
-                    }
-                }
-            }
-        });
-        
-        // on enregistre ce qu'il faut
-        let evtx = event_tx.clone();
-
-        // enregistre la fonction execute
-        args.rpc_server.register(RPC_SCHEDULE_JOB, move |job: JobInstance, _| {
-            let Some(executor) = execs.lock().get(&job.name).cloned() else {
-                return std::future::ready(Err("aucun exécuteur pour le travail n'a été trouvé")).boxed();
-            };
-
-            let Ok(args) = serde_json::from_value(job.args) else {
-                return std::future::ready(Err("erreur lors de la desérialization des arguments du job")).boxed();
-            };
-
-            let mut evtx = evtx.clone();
-
-            let _ = tokio::spawn(async move {
-                let task = AssertUnwindSafe(executor(args));
-                let result = task.catch_unwind().await;
-
-                match result {
-                    Ok(Ok(result)) => {
-                        let _ = evtx.send(WorkerEvent::JobDone { 
-                            id: job.id, 
-                            result: super::JobResult::Success(result)
-                        }).await;
-                    },
-                    Ok(Err(error)) => {
-                        let _ = evtx.send(WorkerEvent::JobDone { 
-                            id: job.id, 
-                            result: super::JobResult::Failed(format!("le travail {}#{} a échoué: {error}", job.name, job.id)) 
-                        }).await;
-                    }
-                    Err(_) => {
-                        let _ = evtx.send(WorkerEvent::JobDone { 
-                            id: job.id, 
-                            result: super::JobResult::Failed(format!("le travail {}#{} a paniqué", job.name, job.id)) 
-                        }).await;
-                    }
-                }
-                
-            });
-
-            std::future::ready(Ok(())).boxed()
-        });
-
-
-        WorkerServer { event_tx, cmd_tx }
-    }
-}
-
 #[derive(Clone)]
-pub struct WorkerServer {
-    event_tx: mpsc::UnboundedSender<WorkerEvent>,
-    cmd_tx: mpsc::UnboundedSender<Command>
+pub struct Worker {
+    local_node_id: LocalNodeId,
+    events: EventService,
+    executors: Arc<Mutex<HashMap<String, JobExecutor>>>,
+    jobs: Arc<Mutex<HashMap<JobId, JobState>>>
 }
 
-impl WorkerServer {
-    pub fn register_job_executor<F, Args, R, Fut>(&mut self, name: impl ToString, executor: F)
+impl Worker {
+    pub fn new(mut args: WorkerArgs) -> Self {
+        let worker = Self {
+            local_node_id: args.local_node_id,
+            events: args.events,
+            executors: Arc::new(Mutex::new(HashMap::default())),
+            jobs: Arc::new(Mutex::new(HashMap::default()))
+        };
+
+        ScheduleJob::new(worker.clone()).register(&mut args.rpc);
+        GetJobState::new(worker.clone()).register(&mut args.rpc);
+
+        worker
+    }
+
+    pub fn register_job_executor<F, Args, R, Fut>(&self, name: impl ToString, executor: F)
         where F: (Fn(Args) -> Fut) + Send + Sync + 'static,
                 Fut: Future<Output=Result<R, crate::Error>> + Send + 'static,
                 Args: DeserializeOwned,
                 R: Serialize
     {
-        use Command::Register;
 
         let wrapped = move |args: serde_json::Value| {
             let args = serde_json::from_value(args).unwrap();
@@ -140,7 +61,77 @@ impl WorkerServer {
             }.boxed()
         };
 
-        let _ = self.cmd_tx.send(Register(name.to_string(), Arc::new(wrapped)));
+        let name = name.to_string();
+
+        self.executors.lock().insert(name.clone(), Arc::new(wrapped));
+    }
+
+    fn update_state(&self, id: JobId, state: JobState) {
+        *self.jobs.lock().entry(id).or_default() = state.clone();
+        self.events.emit_event(WorkerEvent::JobUpdate { id, state });
+    }
+
+    pub(super) fn get_job_state(self, id: &JobId) -> Result<JobState, WorkerError> {
+        self.jobs.lock().get(id).cloned().ok_or_else(|| WorkerError::NoJobFound(*id))
+    }
+
+    async fn execute_job(self, job: JobInstance) {
+        use JobState::{Failed, Running, Completed};
+        
+        let Some(executor) = self.executors.lock()
+            .get(&job.name)
+            .cloned() else {
+
+            self.update_state(job.id, Failed { error: WorkerError::NoJobExecutorFound(job.name.clone()) });
+            return;
+        };
+   
+        self.update_state(job.id, Running { worker: self.local_node_id.clone().into() });
+
+        let result = match AssertUnwindSafe(executor(job.args)).catch_unwind().await {
+            Err(err) => {
+                let error = WorkerError::Panicked(extract_panic_message(err));
+                self.update_state(job.id, Failed {error});
+                return;
+            }
+
+            Ok(result) => result
+        };
+
+        match result.map_err(WorkerError::ExecutionError) {
+            Ok(value) => self.update_state(job.id, Completed(value)),
+            Err(error) => self.update_state(job.id, Failed {error}),
+        }
+    }
+    
+
+    pub(super) async fn schedule_job(self, job: JobInstance) -> Result<JobAck, WorkerError> {
+        use JobState::{Failed, Scheduled};
+
+        if self.executors.lock().get(&job.name).is_none() {
+            self.update_state(job.id, Failed { error: WorkerError::NoJobExecutorFound(job.name.clone()) });
+            return Err(WorkerError::NoJobExecutorFound(job.name.clone()));
+        }
+        
+        let job_id = job.id.clone();
+        let scheduled = Scheduled { worker: self.local_node_id.clone().into() };
+        self.update_state(job_id, scheduled);
+
+        tokio::spawn(self.clone().execute_job(job));
+
+        Ok(JobAck {
+            worker_id: self.local_node_id.clone().into(),
+            job_id
+        })
     }
 }
 
+fn extract_panic_message(err: Box<dyn Any + Send>) -> String {
+    if let Some(s) = err.downcast_ref::<&str>() {
+        s.to_string()
+    } else if let Some(s) = err.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "panique inconnue".to_string()
+    }
+}

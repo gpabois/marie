@@ -11,12 +11,21 @@
 -- filet de sécurité si une ligne était un jour insérée hors de ce chemin.
 CREATE TABLE IF NOT EXISTS marie_sessions (
     id TEXT PRIMARY KEY,
-    workspace_id TEXT 
-    logs JSONB NOT NULL,
-    state JSONB NOT NULL,
+    workspace_id TEXT ,
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
 
     CONSTRAINT fk_session_ws
-    FOREIGN KEY (workspace_id) REFERENCES workspace(id)
+    FOREIGN KEY (workspace_id) REFERENCES marie_workspaces(id)
+);
+
+CREATE TABLE IF NOT EXISTS marie_sessions_logs (
+    id TEXT PRIMARY KEY,
+    session_id TEXT,
+    entry JSONB NOT NULL,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    last_updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+    CONSTRAINT fk_sessions_logs
+    FOREIGN KEY (session_id) REFERENCES marie_sessions(id)
 );

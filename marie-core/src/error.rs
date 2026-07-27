@@ -26,7 +26,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 /// Chaîne de messages capturée depuis une erreur (et ses causes), portable
 /// sur le réseau. Voir la documentation de module pour le choix de
 /// conception.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct Error {
     /// `chain[0]` est le message de plus haut niveau (le plus de contexte),
     /// chaque élément suivant est la cause du précédent.

@@ -52,6 +52,17 @@ impl From<&PeerId> for LeaseNodeId {
     }
 }
 
+impl From<&crate::node::NodeId> for LeaseNodeId {
+    /// Un [`crate::node::NodeId`] enveloppe déjà les octets bruts d'un
+    /// `PeerId` (voir `node.rs`) — hasher directement ces octets évite un
+    /// aller-retour `NodeId -> PeerId -> LeaseNodeId` partout où ce module ne
+    /// connaît qu'un `NodeId` (ex. la composition du groupe Raft, dérivée
+    /// d'`Annuary`).
+    fn from(value: &crate::node::NodeId) -> Self {
+        LeaseNodeId(stable_hash(value.as_ref()))
+    }
+}
+
 const FNV_OFFSET: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
@@ -151,14 +162,14 @@ impl RaftNetworkFactory<LeaseTypeConfig> for LeaseNetworkFactory {
     type Network = LeaseNetwork;
 
     async fn new_client(&mut self, target: LeaseNodeId, node: &crate::node::NodeId) -> Self::Network {
-        LeaseNetwork { rpc_client: self.0.clone(), target, peer_id: node.clone().into() }
+        LeaseNetwork { rpc_client: self.0.clone(), target, node: node.clone() }
     }
 }
 
 pub struct LeaseNetwork {
     rpc_client: RpcClient,
     target: LeaseNodeId,
-    peer_id: PeerId,
+    node: crate::node::NodeId,
 }
 
 impl LeaseNetwork {
@@ -182,7 +193,7 @@ impl RaftNetwork<LeaseTypeConfig> for LeaseNetwork {
         rpc: AppendEntriesRequest<LeaseTypeConfig>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<LeaseNodeId>, RPCError<LeaseNodeId, crate::node::NodeId, RaftError<LeaseNodeId>>> {
-        let result = self.rpc_client.invoke::<RaftAppendEntries>(rpc, [self.peer_id]).await.map_err(Self::transport_error)?;
+        let result = self.rpc_client.invoke::<RaftAppendEntries>(rpc, [self.node.clone()]).await.map_err(Self::transport_error)?;
         result.map_err(|err| self.remote(err))
     }
 
@@ -191,7 +202,7 @@ impl RaftNetwork<LeaseTypeConfig> for LeaseNetwork {
         rpc: VoteRequest<LeaseNodeId>,
         _option: RPCOption,
     ) -> Result<VoteResponse<LeaseNodeId>, RPCError<LeaseNodeId, crate::node::NodeId, RaftError<LeaseNodeId>>> {
-        let result = self.rpc_client.invoke::<RaftVote>(rpc, [self.peer_id]).await.map_err(Self::transport_error)?;
+        let result = self.rpc_client.invoke::<RaftVote>(rpc, [self.node.clone()]).await.map_err(Self::transport_error)?;
         result.map_err(|err| self.remote(err))
     }
 
@@ -203,7 +214,7 @@ impl RaftNetwork<LeaseTypeConfig> for LeaseNetwork {
         InstallSnapshotResponse<LeaseNodeId>,
         RPCError<LeaseNodeId, crate::node::NodeId, RaftError<LeaseNodeId, openraft::error::InstallSnapshotError>>,
     > {
-        let result = self.rpc_client.invoke::<RaftInstallSnapshot>(rpc, [self.peer_id]).await.map_err(Self::transport_error)?;
+        let result = self.rpc_client.invoke::<RaftInstallSnapshot>(rpc, [self.node.clone()]).await.map_err(Self::transport_error)?;
         result.map_err(|err| self.remote(err))
     }
 }

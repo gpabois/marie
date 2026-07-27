@@ -300,9 +300,9 @@ impl Actor {
                             }
                         },
                         Behaviour(Mdns(mdns::Event::Expired(list))) => {
-                            use NetworkEvent::PeerDisconnected;
+                            use NetworkEvent::NodeDisconnected;
                             for (peer_id, addr) in list {
-                                let _ = self.events_tx.send(PeerDisconnected {peer_id});
+                                let _ = self.events_tx.send(NodeDisconnected { node_id: peer_id.into() });
                             }
                         },
                         Behaviour(Identify(IdEvent::Received { peer_id, info, .. })) => {
@@ -315,21 +315,15 @@ impl Actor {
                         },
                         Behaviour(Rendezvous(rendezvous::client::Event::Discovered {registrations, ..})) => {
                             for registration in registrations {
-                                let peer_id = registration.record.peer_id();
-                                if peer_id == *self.swarm.local_peer_id() { continue }
-
-                                let ttl = registration.ttl; // ttl in seconds
-                                let namespace = registration.namespace;
-                                let _ = self.events_tx.send(NetworkEvent::NamespacePeerRegistred { peer_id, namespace, ttl });
                             }
                         },
                         SwarmEvent::ConnectionClosed { peer_id, num_established: 0, .. } => {
-                            use NetworkEvent::PeerDisconnected;
-                            let _ = self.events_tx.send(PeerDisconnected { peer_id });
+                            use NetworkEvent::NodeDisconnected;
+                            let _ = self.events_tx.send(NodeDisconnected { node_id: peer_id.into() });
                         },
                         SwarmEvent::ConnectionEstablished { peer_id, num_established, .. } if num_established.get() == 1 => {
-                            use NetworkEvent::PeerConnected;
-                            let _ = self.events_tx.send(PeerConnected { peer_id });
+                            use NetworkEvent::NodeConnected;
+                            let _ = self.events_tx.send(NodeConnected { node_id: peer_id.into() });
                         },
                         _ => {}
                     }

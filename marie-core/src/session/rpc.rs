@@ -4,6 +4,8 @@ use libp2p::PeerId;
 use serde_json::Value;
 use tokio::sync::oneshot;
 
+#[cfg(feature="rpc-executor")]
+use crate::graph::NodeId;
 use crate::{
     rpc::{RemoteProcedureCall, Void}, session::{
         Session, SessionAppendLogRequest, SessionId, SessionInsertInLogRequest, SessionPushGraphRequest, SessionPushHitlRequest, SessionPushOrchestrationRequest, SessionReportAgentRunRequest, SessionReportGraphDispatchRequest, SessionReportGraphRunRequest, SessionReportToolDispatchRequest, SessionReportToolExecutionRequest, SessionReportUserInputRequest, SessionUpdateGraphStepRequest, SessionVarsPatchRequest, SessionStateQueryRequest, SessionVarsRemoveRequest, server::{SessionCommand, query_state}, store::{SessionStore, SessionStoreClient},
@@ -265,7 +267,7 @@ impl RemoteProcedureCall for QueryState {
     type Return = Result<Vec<Value>, String>;
 
     #[cfg(feature="rpc-executor")]
-    async fn execute(self, request: SessionStateQueryRequest, _: PeerId) -> Result<Vec<Value>, String> {
+    async fn execute(self, request: SessionStateQueryRequest, _: NodeId) -> Result<Vec<Value>, String> {
         query_state(self.0, request.location, &request.path).await.map_err(|e| e.to_string())
     }
 }

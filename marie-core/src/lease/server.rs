@@ -10,6 +10,7 @@ use crate::{
         raft::{LeaseNetworkFactory, LeaseNodeId, LeaseRaft, RaftAppendEntries, RaftInstallSnapshot, RaftVote},
         storage::{LeaseLogStore, LeaseStateMachine},
     },
+    node::NodeId,
     rpc::{RemoteProcedureCall, RpcClient, RpcServer},
 };
 
@@ -76,13 +77,15 @@ async fn bootstrap(raft: LeaseRaft, annuary: Annuary, local_peer_id: PeerId) {
     let mut lease_capability = Capabilities::default();
     lease_capability.set_lease();
 
-    let mut peers = annuary.peers_with(lease_capability);
-    if !peers.contains(&local_peer_id) {
-        peers.push(local_peer_id);
+    let local_node_id = NodeId::from(local_peer_id);
+
+    let mut peers = annuary.nodes_with(lease_capability);
+    if !peers.contains(&local_node_id) {
+        peers.push(local_node_id.clone());
     }
 
-    let lowest = peers.iter().min_by_key(|peer_id| LeaseNodeId::from(**peer_id)).copied();
-    if lowest != Some(local_peer_id) {
+    let lowest = peers.iter().min_by_key(|node_id| LeaseNodeId::from(*node_id)).cloned();
+    if lowest != Some(local_node_id) {
         return;
     }
 
@@ -96,7 +99,7 @@ async fn bootstrap(raft: LeaseRaft, annuary: Annuary, local_peer_id: PeerId) {
     }
 
     let members: BTreeMap<LeaseNodeId, crate::node::NodeId> =
-        peers.into_iter().map(|peer_id| (LeaseNodeId::from(peer_id), crate::node::NodeId::from(peer_id))).collect();
+        peers.into_iter().map(|node_id| (LeaseNodeId::from(&node_id), node_id)).collect();
 
     if let Err(error) = raft.initialize(members).await {
         warn!(%error, "échec de l'initialisation du groupe Raft de LeaseAuthority");
@@ -249,6 +252,7 @@ mod tests {
 
         let acquire = |holder: PeerId, epoch_or_none: Option<u64>| {
             let session_id = session_id;
+            let holder = crate::node::NodeId::from(holder);
             let raft_a = raft_a.clone();
             async move {
                 let op = match epoch_or_none {
@@ -272,7 +276,7 @@ mod tests {
         let denied = acquire(peer_b, None).await;
         match denied {
             LeaseResult::Denied { current_holder, current_epoch } => {
-                assert_eq!(current_holder, peer_a);
+                assert_eq!(current_holder, crate::node::NodeId::from(peer_a));
                 assert_eq!(current_epoch, epoch);
             }
             other => panic!("attendu Denied, obtenu {other:?}"),
@@ -286,7 +290,7 @@ mod tests {
         let request = LeaseRequest {
             request_id: generate_id(),
             session_id,
-            op: LeaseOp::Release { holder: peer_a, epoch },
+            op: LeaseOp::Release { holder: crate::node::NodeId::from(peer_a), epoch },
         };
         let released = raft_a.client_write(request).await.unwrap().data;
         assert!(matches!(released, LeaseResult::Renewed { .. }), "attendu Renewed (relâché), obtenu {released:?}");

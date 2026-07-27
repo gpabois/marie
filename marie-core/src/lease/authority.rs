@@ -1,10 +1,9 @@
 use std::collections::HashMap;
 
 use chrono::Utc;
-use libp2p::PeerId;
 use serde::{Deserialize, Serialize};
 
-use crate::{lease::protocol::{LeaseRequest, LeaseResponse, LeaseResult}, session::SessionId};
+use crate::{lease::protocol::{LeaseRequest, LeaseResponse, LeaseResult}, node::NodeId, session::SessionId};
 
 /// Machine à états du bail/epoch d'une session, répliquée via Raft (voir
 /// `lease::storage::LeaseStateMachine`, qui l'enveloppe et l'appelle depuis
@@ -22,10 +21,10 @@ impl LeaseAuthority {
     pub(crate) fn handle_request(&mut self, request: &LeaseRequest) -> LeaseResponse {
         use super::protocol::LeaseOp::{Acquire, Renew, Release};
 
-        let result = match request.op {
-            Acquire { holder, ttl } => self.acquire(request.session_id, holder, ttl),
-            Renew { holder, epoch, ttl } => self.renew(request.session_id, holder, epoch, ttl),
-            Release { holder, epoch } => self.release(request.session_id, holder, epoch),
+        let result = match &request.op {
+            Acquire { holder, ttl } => self.acquire(request.session_id, holder.clone(), *ttl),
+            Renew { holder, epoch, ttl } => self.renew(request.session_id, holder.clone(), *epoch, *ttl),
+            Release { holder, epoch } => self.release(request.session_id, holder.clone(), *epoch),
         };
 
         LeaseResponse {
@@ -34,7 +33,7 @@ impl LeaseAuthority {
         }
     }
 
-    fn release(&mut self, session_id: SessionId, holder: PeerId, epoch: u64) -> LeaseResult {
+    fn release(&mut self, session_id: SessionId, holder: NodeId, epoch: u64) -> LeaseResult {
         use super::protocol::LeaseResult::{Renewed, Denied};
 
         if let Some(lease) = self.leases.get(&session_id) {
@@ -47,7 +46,7 @@ impl LeaseAuthority {
         Denied { current_holder: holder, current_epoch: 0 }
     }
 
-    fn renew(&mut self, session_id: SessionId, holder: PeerId, epoch: u64, ttl: chrono::Duration) -> LeaseResult {
+    fn renew(&mut self, session_id: SessionId, holder: NodeId, epoch: u64, ttl: chrono::Duration) -> LeaseResult {
         use super::protocol::LeaseResult::{Renewed, Denied};
         let now = chrono::Utc::now();
         match self.leases.get_mut(&session_id) {
@@ -60,7 +59,7 @@ impl LeaseAuthority {
         }
     }
 
-    fn acquire(&mut self, session_id: SessionId, holder: PeerId, ttl: chrono::Duration) -> LeaseResult {
+    fn acquire(&mut self, session_id: SessionId, holder: NodeId, ttl: chrono::Duration) -> LeaseResult {
         use super::protocol::LeaseResult::{Granted, Denied};
 
         let now = chrono::Utc::now();
@@ -107,7 +106,7 @@ pub(crate) struct LeaseSnapshot {
 
 #[derive(Clone, Serialize, Deserialize)]
 struct LeaseEntry {
-    holder: PeerId,
+    holder: NodeId,
     epoch: u64,
     expires_at: chrono::DateTime<Utc>,
 }

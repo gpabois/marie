@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentFrameId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, session::SessionId, tools::client::ToolError};
+use crate::{agent::AgentFrameId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
 pub use marie_macros::core_tool;
@@ -101,15 +101,9 @@ pub trait Toolable: Clone + Sized + 'static {
     }
 }
 
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable)]
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Pod, Zeroable, Serialize, Deserialize)]
 #[repr(C)]
-pub struct ToolCallId(SessionId, ID);
-
-impl ToolCallId {
-    pub fn session_id(&self) -> SessionId {
-        self.0
-    }
-}
+pub struct ToolCallId(ID);
 
 impl AsRef<[u8]> for ToolCallId {
     fn as_ref(&self) -> &[u8] {
@@ -118,8 +112,8 @@ impl AsRef<[u8]> for ToolCallId {
 }
 
 impl ToolCallId {
-    pub fn new(session_id: SessionId, id: ID) -> Self {
-        Self(session_id, id)
+    pub fn new(id: ID) -> Self {
+        Self(id)
     }
 }
 
@@ -128,35 +122,10 @@ impl ToolCallId {
 /// l'agent appelant (voir `session::server::report_tool_execution`).
 impl Display for ToolCallId {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}/{}", self.0, self.1)
+        write!(f, "{}", self.0)
     }
 }
 
-impl std::str::FromStr for ToolCallId {
-    type Err = crate::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (session_part, local_part) = s.split_once('/').ok_or_else(|| crate::err!("format de ToolCallId invalide : {s}"))?;
-        Ok(Self(session_part.parse()?, local_part.parse()?))
-    }
-}
-
-/// Sérialisé/désérialisé comme une chaîne plutôt que via le `derive` par
-/// défaut — même raison que [`crate::agent::AgentId`] : servir de clé de
-/// `HashMap` dans une structure sérialisée en JSON (voir
-/// `YieldStatus::WaitingToolReply::tools_outputs`).
-impl Serialize for ToolCallId {
-    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.serialize_str(&self.to_string())
-    }
-}
-
-impl<'de> Deserialize<'de> for ToolCallId {
-    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let repr = String::deserialize(deserializer)?;
-        repr.parse().map_err(serde::de::Error::custom)
-    }
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {
@@ -170,6 +139,14 @@ pub struct ToolCall {
     pub name: ToolName,
     pub parameters: Value
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelToolCall {
+    pub id: ToolCallId,
+    pub name: ToolName,
+    pub parameters: Value
+}
+
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -215,7 +192,6 @@ impl From<ToolEvent> for EventEnvelope {
             id: String::default(), 
             topic: value.topic(), 
             payload: serde_json::to_vec(&value).unwrap(), 
-            source: None
         }
     }
 }

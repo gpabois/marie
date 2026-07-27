@@ -1,44 +1,24 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-use crate::{
-    job::{JobId, JobState},
-    layer::{IntoService as _, LayerExt as _},
-    network::{swarm::SwarmNetwork},
-    worker::layers::WorkerEventLayer,
-    events::{EventEnvelope, layers::EventLayer},
-    rpc::RpcError,
-};
-
 #[cfg(feature = "worker")]
 use typed_builder::TypedBuilder;
-
-#[cfg(feature = "worker")]
-use crate::{
-    job::JobInstance,
-    bootstrap::{self, client::BootstrapArgs},
-    watchdog::{WorkerWatchdog, WorkerWatchdogArgs},
-    rpc,
-    session::client::SessionClient, tools::{builtin::register_builtins_tools_executors, worker::{ToolWorkerArgs, ToolWorker}}
-};
 
 pub mod info;
 pub mod client;
 
 #[cfg(feature="worker-server")]
 pub mod server;
-pub mod protocol;
+
+mod protocol;
+pub mod rpc;
 pub use protocol::*;
 #[cfg(feature="worker-server")]
-pub use server::{WorkerServer, WorkerServerArgs};
-
-pub(crate) mod layers;
-#[cfg(feature="worker-watchdog")]
-mod watchdog;
-#[cfg(feature="worker-watchdog")]
-pub use watchdog::{WorkerWatchdog, WorkerWatchdogArgs};
+pub use server::{Worker, WorkerArgs};
 
 pub use client::WorkerClient;
+
+use crate::job::JobId;
 
 pub const RPC_SCHEDULE_JOB: &str = "marie/worker/schedule";
 pub const RPC_WATCH_JOB: &str = "marie/worker/watch";
@@ -47,26 +27,34 @@ pub const RPC_GET_STATE_JOB: &str = "marie/worker/job/get-state";
 pub const NS_WORKER: &str = "marie/ns/workers";
 pub const NS_WORKER_WATCHDOG: &str = "marie/ns/workers/watchdogs";
 
-#[derive(Debug, Error)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq)]
 pub enum WorkerError {
-    #[error("aucun worker n'est accessible")]
-    NoWorkerFound,
-    #[error("aucun watchdog n'est accessible")]
-    NoWatchdogFound,
-    #[error("erreur lors de l'appel distant")]
-    RpcError(#[from] RpcError),
-    #[error("ce n'est pas un évènement du worker")]
-    NotWorkerEvent
+    #[error("aucun exécuteur de travail trouvé pour {0}")]
+    NoJobExecutorFound(String),
+    #[error("le job {0} n'a pas été trouvé")]
+    NoJobFound(JobId),
+    #[error("l'exécution du travail a paniqué : {0}")]
+    Panicked(String),
+    #[error("l'exécution a échoué : {0}")]
+    ExecutionError(crate::Error),
+    #[error("aucun travailleur disponible")]
+    NoWorkerAvailable,
+    #[error("le sondage a expiré sans réponse")]
+    ProbingTimeOut,
+    #[error("le travailleur n'a pas reconnu la tâche dans les temps")]
+    AckTimeOut,
+    #[error("une erreur est survenue pendant la programmation de la tâche: {0}")]
+    ScheduledError(String),
+    #[error("erreur lors de l'appel RPC : {0}")]
+    RpcError(String),
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum JobResult {
-    Success(serde_json::Value),
-    Failed(String)
-}
-
-#[cfg(feature = "worker")]
-#[derive(TypedBuilder)]
-pub struct WorkerArgs {
-    tools: ToolWorkerArgs
+/// Pas de `#[from]` direct (voir `ScheduledError`, qui suit le même
+/// principe) : `crate::rpc::RpcError` ne dérive pas `PartialEq`, requis ici
+/// par `#[derive(PartialEq)]` sur [`WorkerError`] — le message est donc
+/// converti en `String` plutôt que le type d'erreur conservé tel quel.
+impl From<crate::rpc::RpcError> for WorkerError {
+    fn from(error: crate::rpc::RpcError) -> Self {
+        WorkerError::RpcError(error.to_string())
+    }
 }

@@ -1,16 +1,17 @@
 
 use async_trait::async_trait;
-use libp2p::PeerId;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use crate::{id::ID, worker::server::WorkerServer};
+#[cfg(feature = "job-executor")]
+use crate::worker::Worker;
+use crate::{id::ID, node::NodeId, worker::{WorkerError}};
 
 pub use marie_macros::core_job;
 
 pub type JobId = ID;
 // Diffusé sur Gossipsub par le Control Plane
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct JobInstance {
-    pub id: ID,
+    pub id: JobId,
     pub name: String,
     pub args: serde_json::Value
 }
@@ -29,16 +30,32 @@ pub struct JobInstance {
 pub enum JobState {
     #[default]
     Unknown,
-    Pending,
-    Scheduled { worker: PeerId },
-    /// `worker` : rapporté par le worker lui-même (voir
-    /// `network::worker::report_job_state`), pas recalculé par le control
-    /// plane — nécessaire pour dériver les détenteurs actifs d'une session
-    /// directement depuis `jobs` (voir `ControlPlaneState::session_holders`)
-    /// sans pointeur séparé.
-    Running { worker: PeerId },
+    PendingScheduling { instance: JobInstance, worker: NodeId},
+    PendingAck { worker: NodeId },
+    Probing { worker: NodeId },
+    Scheduled { worker: NodeId },
+    Running { worker: NodeId },
     Completed(serde_json::Value),
-    Failed { error: String },
+    Failed { error: WorkerError },
+}
+
+impl JobState {
+    pub fn has_terminated(&self) -> bool {
+        use JobState::{ Completed, Failed };
+
+        matches!(self, Completed(_) | Failed {..})
+    }
+
+    pub fn is_probing(&self) -> bool {
+        use JobState::Probing;
+        matches!(self, Probing{..})
+    }
+
+    pub fn is_pending_ack(&self) -> bool {
+        use JobState::PendingAck;
+
+        matches!(self, PendingAck{..})
+    }
 }
 
 /// Calqué sur [`crate::rpc::RemoteProcedureCall`] : sans ce trait, le nom
@@ -59,7 +76,7 @@ pub trait Job: Sized {
     async fn execute(self, args: Self::Args) -> Result<Self::Return, crate::Error>;
 
     #[cfg(feature = "job-executor")]
-    fn register(self, worker: &mut WorkerServer) where Self: Clone + Send + Sync + 'static {
+    fn register(self, worker: &mut Worker) where Self: Clone + Send + Sync + 'static {
         let func = move |args| {
             self.clone().execute(args)
         };

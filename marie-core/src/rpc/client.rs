@@ -105,7 +105,7 @@ impl RpcClient {
     pub async fn invoke<Rpc: RemoteProcedureCall>(
         &self, 
         args: impl Into<Rpc::Args>, 
-        destinations: impl IntoIterator<Item=PeerId>
+        destinations: impl IntoIterator<Item=NodeId>
     ) -> Result<Rpc::Return, RpcError> {
         RpcCallArgs::builder()
             .name(Rpc::NAME)

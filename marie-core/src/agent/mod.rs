@@ -200,7 +200,7 @@ pub async fn run(
 
     for _ in 0..MAX_TURNS_PER_RUN {
         let input = frame.context.iter().map(|entry| format!("{}: {}", entry.role, entry.content)).collect::<Vec<_>>().join("\n");
-        let response = model::execute(declaration.clone(), &signatures, input).await?;
+        let response = model::execute(declaration.clone(), signatures.clone(), input).await?;
 
         if let Some(text) = &response.text {
             push_context(frame, sessions, ContextEntry { role: Role::Assistant, content: text.clone() }).await?;

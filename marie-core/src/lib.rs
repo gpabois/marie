@@ -16,12 +16,8 @@ pub mod layer;
 pub mod events;
 pub mod session;
 pub mod hitl;
-#[cfg(feature = "catalog")]
 pub mod store;
 
-#[cfg(feature = "catalog")]
-pub mod persistency;
-#[cfg(feature = "catalog")]
 mod vfs;
 pub mod graph;
 pub mod di;
@@ -35,7 +31,6 @@ pub mod annuary;
 pub mod hrw;
 pub mod post;
 pub mod catalog;
+pub mod stream;
 
 pub use error::{Context, Error, Result};
-#[cfg(feature = "catalog")]
-pub use network::catalog::{start_catalog, CatalogArgs};

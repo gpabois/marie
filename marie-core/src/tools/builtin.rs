@@ -22,7 +22,7 @@ pub struct QueryStateArgs {
 }
 
 #[derive(Clone)]
-pub struct QueryState{
+pub struct QueryState {
     workspaces: WorkspaceClient,
     sessions: SessionClient
 }

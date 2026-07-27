@@ -26,21 +26,16 @@ pub enum NetworkEvent {
     BootstrapDiscovered {
         peer_id: PeerId
     },
-    NamespacePeerRegistred {
-        namespace: Namespace,
-        peer_id: PeerId,
-        ttl: Ttl
-    },
-    PeerDisconnected {
-        peer_id: PeerId,
+    NodeDisconnected {
+        node_id: NodeId,
     },
     /// Première connexion établie avec `peer_id` (voir
     /// `SwarmEvent::ConnectionEstablished`) — consommé notamment par
     /// [`crate::annuary::Annuary`] pour découvrir les pairs du cluster sans
     /// dépendre du mécanisme de rendez-vous par namespace
     /// (`network::bootstrap::BootstrapClient`).
-    PeerConnected {
-        peer_id: PeerId,
+    NodeConnected {
+        node_id: NodeId,
     },
     EventReceived {
         id: String,

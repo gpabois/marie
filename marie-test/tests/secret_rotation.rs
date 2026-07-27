@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use async_trait::async_trait;
 use marie_core::model::catalog::rotate::{assert_no_rows_at_epoch, reencrypt_model_store};
 use marie_core::model::catalog::store::{ModelStore, ModelStoreActor, StoredModel};
-use marie_core::model::{Model, ModelId};
+use marie_core::model::{EncryptedModel, ModelId};
 use marie_core::secret::SecretManager;
 
 /// Store mémoire minimal pour exercer `model::catalog::rotate` depuis
@@ -44,8 +44,8 @@ fn key(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
 
-fn sample_model(id: &str, api_key: &str) -> Model {
-    Model::OpenAICompatible {
+fn sample_model(id: &str, api_key: &str) -> EncryptedModel {
+    EncryptedModel::OpenAICompatible {
         id: id.to_string(),
         base_url: "https://example.test".to_string(),
         client_id: "client".to_string(),
