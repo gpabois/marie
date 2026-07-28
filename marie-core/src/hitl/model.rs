@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 /// Type de réponse attendu pour une [`Question`] — détermine à la fois le
 /// composant présenté à l'humain (côté passerelle) et la forme attendue de
 /// l'[`Answer`] correspondante (voir [`validate_answers`]).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum QuestionKind {
     /// Réponse libre, sur une ligne (ex: un nom, un identifiant).
@@ -34,7 +34,7 @@ pub enum QuestionKind {
 /// rester lisible côté passerelle humaine sans avoir à conserver une
 /// correspondance question ↔ id (ex: `"root_cause"` plutôt qu'un
 /// [`crate::id::ID`] opaque).
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Question {
     pub key: String,
     pub label: String,

@@ -5,10 +5,7 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    agent::{AgentFrameId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, 
-    id::ID, 
-    state::State, 
-    graph::{GraphFrame, GraphFrameId}, 
+    agent::{AgentFrameId, frame::AgentFrame, status::{AgentStatus, YieldStatus}}, graph::{GraphFrame, GraphFrameId}, id::ID, session::frames::FrameTree, state::State, 
 };
 
 
@@ -50,56 +47,6 @@ impl AsRef<[u8]> for SessionId {
     }
 }
 
-
-
-#[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable)]
-#[repr(C)]
-pub struct SessionLogId(ID);
-
-impl SessionLogId {
-    #[must_use]
-    pub fn new(id: ID) -> Self {
-        Self(id)
-    }
-}
-
-impl fmt::Display for SessionLogId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        fmt::Display::fmt(&self.0, f)
-    }
-}
-
-impl FromStr for SessionLogId {
-    type Err = crate::Error;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        Ok(Self(s.parse()?))
-    }
-}
-
-impl From<ID> for SessionLogId {
-    fn from(id: ID) -> Self {
-        Self(id)
-    }
-}
-
-impl AsRef<[u8]> for SessionLogId {
-    fn as_ref(&self) -> &[u8] {
-        bytemuck::bytes_of(self)
-    }
-}
-
-/// Une entrée du journal d'une session, identifiée par [`SessionLogId`] pour
-/// permettre d'y ajouter du texte au fil de l'eau (voir
-/// [`crate::session::rpc::InsertInLog`]) plutôt que de ne pouvoir qu'ajouter
-/// des lignes complètes et immuables.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct SessionLog {
-    pub id: SessionLogId,
-    pub content: String,
-}
-
-
 /// État d'une session — un ou plusieurs [`AgentFrame`], zéro ou plusieurs
 /// [`GraphFrame`]/[`OrchestrationFrame`]/[`HitlFrame`] satellites (voir la
 /// doc de [`crate::state_graph`] pour la symétrie de ces trois), un
@@ -116,8 +63,7 @@ pub struct SessionLog {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
-    pub logs: Vec<SessionLog>,
-    pub state: State,
+    pub frames: FrameTree,
     /// Horodatage géré par le store (voir
     /// `session::store::SessionStore::insert`), pas par l'appelant : toute
     /// valeur posée ici avant un `insert` est ignorée, écrasée par l'heure
@@ -127,10 +73,4 @@ pub struct Session {
     /// `insert`/`replace` (voir `session::store::SessionStore::replace`),
     /// contrairement à `created_at` qu'un `replace` laisse intact.
     pub last_updated_at: chrono::DateTime<chrono::Utc>,
-}
-
-impl Session {
-    pub fn state(&self) -> &State {
-        &self.state
-    }
 }

@@ -27,7 +27,7 @@ pub const RPC_GET_STATE_JOB: &str = "marie/worker/job/get-state";
 pub const NS_WORKER: &str = "marie/ns/workers";
 pub const NS_WORKER_WATCHDOG: &str = "marie/ns/workers/watchdogs";
 
-#[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Error, Serialize, Deserialize, PartialEq, Eq)]
 pub enum WorkerError {
     #[error("aucun exécuteur de travail trouvé pour {0}")]
     NoJobExecutorFound(String),
@@ -47,6 +47,8 @@ pub enum WorkerError {
     ScheduledError(String),
     #[error("erreur lors de l'appel RPC : {0}")]
     RpcError(String),
+    #[error("erreur lors des opérations serde: {0}")]
+    SerdeError(String)
 }
 
 /// Pas de `#[from]` direct (voir `ScheduledError`, qui suit le même

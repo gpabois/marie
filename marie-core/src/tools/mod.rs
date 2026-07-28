@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentFrameId, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, tools::client::ToolError};
+use crate::{agent::AgentFrameId, catalog::{Catalog, CatalogError, CatalogItemRef, Catalogable}, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
 pub use marie_macros::core_tool;
@@ -65,6 +65,84 @@ pub struct ToolDefinition {
     pub name: ToolId,
     pub description: String,
     pub parameters_schema: Value
+}
+
+impl Catalogable for ToolDefinition {
+    const KIND: &str = "/marie/catalog/tools";
+
+    fn id(&self) -> &str {
+        self.name.borrow()
+    }
+}
+
+/// Référence immuable vers une version publiée d'un [`ToolDefinition`] —
+/// même rôle que [`crate::model::ModelRef`]/[`crate::graph::GraphRef`].
+#[derive(Clone)]
+pub struct ToolRef(CatalogItemRef);
+
+/// Catalogue des tools connus du cluster — sur le même principe que
+/// [`crate::model::Models`]/[`crate::expert::Experts`]/[`crate::graph::Graphs`] :
+/// un [`Catalog`] Postgres versionné, qui remplace l'ancien
+/// [`ToolCatalog`](crate::tools::catalog::ToolCatalog) (état CRDT `loro`
+/// fusionné entre control planes) maintenant qu'un [`ToolDefinition`] ne
+/// porte aucun secret et n'a pas besoin d'être écrit en continu.
+#[derive(Clone)]
+pub struct Tools {
+    catalog: Catalog
+}
+
+impl Tools {
+    pub fn new(catalog: Catalog) -> Self {
+        Self { catalog }
+    }
+
+    /// Publie la première version d'un tool.
+    pub async fn insert(&self, tool: ToolDefinition) -> Result<ToolRef, CatalogError> {
+        Ok(ToolRef(self.catalog.publish(tool).await?))
+    }
+
+    /// Publie une nouvelle version d'un tool déjà connu — contrairement à
+    /// [`Self::insert`], échoue avec [`CatalogError::NotFound`] si
+    /// `tool.name` n'a encore aucune version active.
+    pub async fn replace(&self, tool: ToolDefinition) -> Result<ToolRef, CatalogError> {
+        self.catalog.latest_ref::<ToolDefinition>(tool.name.borrow()).await?;
+        Ok(ToolRef(self.catalog.publish(tool).await?))
+    }
+
+    /// Soft-delete (voir [`Catalog::delete`]) la version active de `id`.
+    pub async fn delete(&self, id: &ToolId) -> Result<(), CatalogError> {
+        let r = self.catalog.latest_ref::<ToolDefinition>(id.borrow()).await?;
+        self.catalog.delete(&r).await
+    }
+
+    /// Référence de la version active la plus récente de `id`, sans lire son
+    /// contenu — voir [`Self::get`] pour la définition désérialisée.
+    pub async fn latest(&self, id: &ToolId) -> Result<Option<ToolRef>, CatalogError> {
+        match self.catalog.latest_ref::<ToolDefinition>(id.borrow()).await {
+            Ok(r) => Ok(Some(ToolRef(r))),
+            Err(CatalogError::NotFound { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    /// Version active la plus récente de `id`, désérialisée.
+    pub async fn get(&self, id: &ToolId) -> Result<Option<ToolDefinition>, CatalogError> {
+        match self.catalog.latest::<ToolDefinition>(id.borrow()).await {
+            Ok(item) => Ok(Some((*item).clone())),
+            Err(CatalogError::NotFound { .. }) => Ok(None),
+            Err(err) => Err(err),
+        }
+    }
+
+    pub async fn list(&self) -> Result<Vec<ToolDefinition>, CatalogError> {
+        let refs = self.catalog.list::<ToolDefinition>().await?;
+        let mut tools = Vec::with_capacity(refs.len());
+        for r in refs {
+            let item = self.catalog.deref::<ToolDefinition>(&r).await?;
+            tools.push((*item).clone());
+        }
+        Ok(tools)
+    }
 }
 
 #[async_trait]
@@ -126,6 +204,11 @@ impl Display for ToolCallId {
     }
 }
 
+pub struct ToolFrame {
+    pub id: ToolCallId,
+    pub name: ToolName,
+    pub parameters: Value
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ToolCall {

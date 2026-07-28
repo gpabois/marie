@@ -1,9 +1,13 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, marker::PhantomData, sync::Arc};
 
+use async_stream::stream;
 use chrono::{Duration, Utc};
-use futures::StreamExt;
+use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
+use serde::{Deserialize, de::DeserializeOwned};
+use serde_json::Value;
 use tokio::{select, sync};
+use tokio_stream::wrappers::WatchStream;
 use typed_builder::TypedBuilder;
 
 use crate::{
@@ -55,7 +59,7 @@ impl WorkerClient {
     /// modèle que [`crate::rpc::RpcClient::invoke`] — pour que `J::NAME` soit
     /// la seule source de vérité du nom envoyé au worker, sans risque de
     /// diverger d'une constante dupliquée côté appelant.
-    pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobHandle, WorkerError> {
+    pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobHandle<J::Return>, WorkerError> {
         let id = id::generate_id();
 
         let instance = JobInstance {
@@ -66,7 +70,7 @@ impl WorkerClient {
 
         let worker = self.annuary.pick_top_n(id, Capability::Worker, 3).pop_front().ok_or_else(|| WorkerError::NoWorkerAvailable)?;
         
-        let handle = self.watch(id, JobState::PendingScheduling { instance, worker });
+        let handle = self.watch::<J::Return>(id, JobState::PendingScheduling { instance, worker });
 
         Ok(handle)
     }
@@ -165,7 +169,6 @@ impl WorkerClient {
         };
 
         Ok(())
-
     }
 
     /// Probe the state of the job in the worker.
@@ -188,7 +191,7 @@ impl WorkerClient {
 
 impl WorkerClient {
     /// Track a job s
-    fn watch(&self, job_id: JobId, initial: JobState) -> JobHandle {        
+    fn watch<R>(&self, job_id: JobId, initial: JobState) -> JobHandle<R> {        
         let (tx, rx) = sync::watch::channel(JobState::Unknown);
 
         let info = JobInfo {
@@ -203,6 +206,7 @@ impl WorkerClient {
         
         JobHandle {
             job_id,
+            _phantom: Default::default(),
             listener: rx
         }
     }
@@ -216,7 +220,24 @@ struct JobInfo {
 }
 
 #[derive(Clone)]
-pub struct JobHandle {
+pub struct JobHandle<R=Value> {
     job_id: JobId,
+    _phantom: PhantomData<R>,
     listener: sync::watch::Receiver<JobState>,
+}
+
+impl<R> JobHandle<R> where R: DeserializeOwned + Send + 'static {
+    pub fn stream(self) -> impl Stream<Item = Result<JobState<R>, WorkerError>> + Send + 'static {
+        let mut stream = WatchStream::new(self.listener);
+
+        stream! {
+            while let Some(state) = stream.next().await {
+                let terminated = state.has_terminated();
+                yield state.deserialize();
+                if terminated {
+                    break;
+                }
+            }
+        }
+    }
 }

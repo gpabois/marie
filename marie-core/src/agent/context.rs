@@ -1,4 +1,4 @@
-use std::ops::Deref;
+use std::ops::{Deref, DerefMut};
 
 use serde::{Deserialize, Serialize};
 
@@ -13,19 +13,24 @@ impl ToString for Context {
     }
 }
 
+impl AsRef<[ContextEntry]>for Context {
+    fn as_ref(&self) -> &[ContextEntry] {
+        &self.0
+    }
+}
+
 impl Deref for Context {
-    type Target = [ContextEntry];
+    type Target = Vec<ContextEntry>;
 
     fn deref(&self) -> &Self::Target {
         &self.0
     }
 }
 
-impl Context {
-    pub fn push(&mut self, entry: ContextEntry) {
-        self.0.push(entry)
+impl DerefMut for Context {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
     }
-
 }
 
 impl From<Vec<ContextEntry>> for Context {
@@ -38,6 +43,15 @@ impl From<Vec<ContextEntry>> for Context {
 pub struct ContextEntry {
     pub role: Role,
     pub content: String
+}
+
+impl ContextEntry {
+    pub fn assistant(content: impl ToString) -> Self {
+        Self {
+            role: Role::Assistant,
+            content: content.to_string()
+        }
+    }
 }
 
 impl ToString for ContextEntry {

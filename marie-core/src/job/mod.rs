@@ -1,6 +1,7 @@
 
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::Value;
 #[cfg(feature = "job-executor")]
 use crate::worker::Worker;
 use crate::{id::ID, node::NodeId, worker::{WorkerError}};
@@ -9,25 +10,15 @@ pub use marie_macros::core_job;
 
 pub type JobId = ID;
 // Diffusé sur Gossipsub par le Control Plane
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JobInstance {
     pub id: JobId,
     pub name: String,
     pub args: serde_json::Value
 }
 
-/// Cycle de vie d'un job — volontairement découplé de celui de l'agent qu'il
-/// exécute (voir [`JobKind::RunAgent`]) : un job représente *un run borné*,
-/// pas la vie entière de l'agent. `Completed`, `Failed` et `Yielded` sont
-/// tous les trois terminaux — aucun ne redevient jamais `Pending`. Reprendre
-/// un agent après un `Yielded` (condition d'attente résolue) ou un `Failed`
-/// (nouvelle tentative) se fait en soumettant un *nouveau* [`JobInstance`] portant
-/// le même [`GlobalAgentId`] (voir `network::cp::mod::submit_resume_job`),
-/// jamais en mutant celui-ci — c'est ce qui permet à
-/// `ControlPlaneState::jobs` de rester un simple historique append-only de
-/// runs plutôt qu'un état de session à faire évoluer en place.
-#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum JobState {
+#[derive(Default, Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum JobState<R=Value> {
     #[default]
     Unknown,
     PendingScheduling { instance: JobInstance, worker: NodeId},
@@ -35,11 +26,27 @@ pub enum JobState {
     Probing { worker: NodeId },
     Scheduled { worker: NodeId },
     Running { worker: NodeId },
-    Completed(serde_json::Value),
+    Completed(R),
     Failed { error: WorkerError },
 }
 
-impl JobState {
+impl JobState<Value> {
+    pub fn deserialize<R>(self) -> Result<JobState<R>, WorkerError> where R: DeserializeOwned {
+        Ok(match self {
+            JobState::Unknown => JobState::Unknown,
+            JobState::PendingScheduling { instance, worker } => JobState::PendingScheduling { instance, worker },
+            JobState::PendingAck { worker } => JobState::PendingAck { worker },
+            JobState::Probing { worker } => JobState::Probing { worker },
+            JobState::Scheduled { worker } => JobState::Scheduled { worker },
+            JobState::Running { worker } => JobState::Running { worker },
+            JobState::Completed(value) => JobState::Completed(serde_json::from_value(value).map_err(|err| WorkerError::SerdeError(err.to_string()))?),
+            JobState::Failed { error } => JobState::Failed { error },
+        })
+    }
+}
+
+
+impl<R> JobState<R> {
     pub fn has_terminated(&self) -> bool {
         use JobState::{ Completed, Failed };
 
