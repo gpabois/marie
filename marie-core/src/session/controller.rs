@@ -1,18 +1,12 @@
-use std::sync::Arc;
-use futures::{FutureExt, StreamExt, stream};
+use std::sync::{Arc, OnceLock};
+use futures::{FutureExt, StreamExt, TryFutureExt, stream};
 use moka::future::{Cache, CacheBuilder};
 use parking_lot::Mutex;
 use thiserror::Error;
 use tokio::{select, sync::mpsc};
 
 use crate::{
-    agent::context::ContextEntry, 
-    events::EventService, 
-    graph::{GraphSpanFrame, GraphThreadFrame}, 
-    hitl::NewHitlFrame, 
-    job::JobState, 
-    session::{controller::Message::FrameCreated, frames::{NewFrame, FrameId, FrameStatus, FrameTree},
-    protocol::{FrameResponse, GraphCommand}, store::SessionStore, worker::RunFrame}, store::PgStore, worker::WorkerClient
+    agent::{context::ContextEntry, frame}, events::EventService, graph::{GraphSpanFrame, GraphThreadFrame}, hitl::NewHitlFrame, job::JobState, session::{controller::Message::FrameCreated, frames::{FrameData, FrameId, FrameNode, FrameStatus, FrameTree, NewFrame, NewFrameNodeArgs}, protocol::{FrameResponse, GraphCommand}, store::SessionStore, worker::{RunFrame, RunFrameArgs}}, store::PgStore, worker::WorkerClient
 };
 
 use super::{Session, SessionId};
@@ -32,7 +26,7 @@ pub struct SessionControllerArgs {
 pub struct SessionController {
     store: PgStore,
     worker: WorkerClient,
-    sessions: Cache<SessionId, Arc<Mutex<Session>>>,
+    sessions: Cache<SessionId, Arc<SessionHandler>>,
     queue: mpsc::UnboundedSender<Message>
 }
 
@@ -63,18 +57,12 @@ impl SessionController {
     /// ```
     pub fn new(args: SessionControllerArgs) -> Self {
         let store = args.store.clone();
-        let eviction_listener = move |_, session: Arc<Mutex<Session>>, _| {
-            let store = store.clone();
-            let session = session.lock().clone();
-            async move {
-                let _ = store.upsert_session(session).await;
-            }.boxed()
-        };
+
+        let controller: OnceLock<Self> = OnceLock::new();
 
         let (queue_tx, queue_rx) = mpsc::unbounded_channel();
 
         let sessions = CacheBuilder::new(300)
-            .async_eviction_listener(eviction_listener)
             .build();
 
         let controller = Self {
@@ -144,7 +132,7 @@ impl SessionController {
             // 1. On vérifie si une frame parent attend que ses enfants aient terminés
             // 2. Si tous les enfants ont terminés, on va envoyer un message-évènement `AllChildrenFrameHaveTerminated`
             FrameTerminated { session_id, frame_id } 
-                => self.on_terminated_frame(session_id, frame_id).await,
+                => self.on_frame_terminated(session_id, frame_id).await,
             // On aggrège les sorties des enfants et on injecte dans dans le contexte de la frame parent.
             AllChildrenFrameHaveTerminated { session_id, parent_id } 
                 => self.on_all_terminated_children(session_id, parent_id).await,
@@ -155,7 +143,7 @@ impl SessionController {
             FrameRunJobStateUpdate { session_id, frame_id, job_state}
                 => self.on_frame_run_update(session_id, frame_id, job_state).await,
             FrameRunTerminated { session_id, frame_id } 
-                => self.on_terminated_frame(session_id, frame_id).await
+                => self.on_frame_terminated(session_id, frame_id).await
         }
     }
 
@@ -170,7 +158,8 @@ impl SessionController {
     /// self.handle_created_frame(session_id, frame_id).await;
     /// ```
     async fn on_frame_created(&self, session_id: SessionId, frame_id: FrameId) {
-        self.mark_frame_as_ready(session_id, frame_id).await
+        let Ok(handler) = self.get(&session_id).await else { return };
+        handler.on_frame_created(&frame_id).await
     }
 
     /// Marque `frame_id` comme [`FrameStatus::Ready`] et pousse
@@ -293,8 +282,11 @@ impl SessionController {
     /// ```ignore
     /// self.handle_ready_frame(session_id, frame_id);
     /// ```
-    fn on_frame_ready(&self, session_id: SessionId, frame_id: FrameId) {
-        let _ = tokio::spawn(self.clone().run_frame(session_id, frame_id));      
+    async  fn on_frame_ready(&self, session_id: SessionId, frame_id: FrameId) {
+        let Ok(session) = self.get(&session_id).await else { return };
+
+        let args = RunFrameArgs::builder().session_id(session_id).frame_id(frame_id).build();
+        let _ = tokio::spawn(self.clone().run_frame(args));      
     }
 
     /// Réagit à [`Message::AllChildrenFrameHaveTerminated`] : agrège la
@@ -340,19 +332,9 @@ impl SessionController {
     /// ```ignore
     /// self.handle_terminated_frame(session_id, frame_id).await;
     /// ```
-    async fn on_terminated_frame(&self, session_id: SessionId, frame_id: FrameId) {
-        use Message::AllChildrenFrameHaveTerminated;
-
-        let Ok(session) = self.get(&session_id).await else { return };
-        let guard = session.lock();
-        let Some(parent_id) = guard.frames.parent_of(&frame_id) else { return };
-        
-        let parent = guard.frames.get(&parent_id);
-        
-        if all_have_terminated(&guard.frames, parent.iter_children()) {
-            drop(guard);
-            let _ = self.queue.send(AllChildrenFrameHaveTerminated { session_id, parent_id });
-        }       
+    async fn on_frame_terminated(&self, session_id: SessionId, frame_id: FrameId) {
+        let Ok(handler) = self.get(&session_id).await else { return };
+        handler.on_frame_terminated(&frame_id).await;  
     }
 
     /// Ajoute `frame` à l'arbre de la session `session_id` — comme nouvelle
@@ -538,7 +520,7 @@ impl SessionController {
     /// // en dehors de `process_message`.
     /// tokio::spawn(controller.clone().run_frame(session_id, frame_id));
     /// ```
-    async fn run_frame(self, session_id: SessionId, frame_id: FrameId) {
+    async fn run_frame(&self, session_id: SessionId, node: FrameNode) {
         let Ok(session) = self.get(&session_id).await else { return };
 
         // Comme dans `Self::handle_terminated_frame_run` : le `MutexGuard`
@@ -588,16 +570,138 @@ impl SessionController {
     /// // suivant, voir le correctif Send dans
     /// // `Self::handle_terminated_frame_run`/`Self::run_frame`.
     /// ```
-    async fn get(&self, id: &SessionId) -> Result<Arc<Mutex<Session>>, SessionError> {
+    async fn get(&self, id: &SessionId) -> Result<Arc<SessionHandler>, SessionError> {
         let store = self.store.clone();
-        let result = self.sessions.try_get_with(*id, async move {
-            store.get_session(id).await.map(|session| Arc::new(Mutex::new(session)))
-        }).await?;
+        let result = self
+            .sessions
+            .try_get_with(*id, SessionHandler::new(*id, self.clone()))
+            .map_err(|err| SessionError::StorageError(err))
+            .await?;
 
         Ok(result)
     }
+
+
+    fn emit(&self, msg: Message) {
+        let _ =self.queue.send(msg);
+    }
 }
 
+pub struct SessionHandler {
+    store: PgStore,
+    controller: SessionController,
+    id: SessionId,
+    worker: WorkerClient,
+    session: Mutex<Session>
+}
+
+impl SessionHandler {
+    pub async fn new(id: SessionId, controller: SessionController) -> Result<Arc<Self>, sqlx::Error> {
+        let session = controller.store.get_session(&id).await.map(|session| Mutex::new(session))?;
+        Ok(Arc::new(Self {
+            store: controller.store.clone(),
+            worker: controller.worker.clone(),
+            controller,
+            id,
+            session
+        }))
+    }
+}
+
+impl SessionHandler {
+    pub fn mark_ready_frame(&self, frame_id: &FrameId) {
+        use Message::FrameReady;
+
+        self.session.lock().frames.get_mut(frame_id).status = FrameStatus::Ready;
+        self.controller.emit(FrameReady { session_id: self.id, frame_id: *frame_id });
+    }
+    
+    pub fn mark_failed_frame(&self, err: impl ToString, frame_id: &FrameId) {
+        use Message::FrameTerminated;
+        self.session.lock().frames.get_mut(frame_id).status = FrameStatus::Failed(err.to_string());
+        self.controller.emit(FrameTerminated { session_id: self.id, frame_id: *frame_id });
+    }
+
+    pub fn mark_completed_frame(&self, frame_id: &FrameId) {
+        use Message::{FrameTerminated, ChildFrameTerminated};
+        self.session.lock().frames.get_mut(frame_id).status = FrameStatus::Completed;
+        self.controller.emit(FrameTerminated { session_id: self.id, frame_id: *frame_id });
+
+        if let Some(parent_id) = self.session.lock().frames.parent_of(frame_id) {
+            self.controller.emit(ChildFrameTerminated { session_id: self.id, parent_id, child_id: *frame_id });
+        }
+    }
+}
+
+impl SessionHandler {
+    async fn run_frame(&self, frame_id:& FrameId) {
+
+        let args = RunFrameArgs::builder().session_id(self.id).frame_id(*frame_id).build();
+       
+        match self.worker.spawn::<RunFrame>(args, None).await  {
+            Ok(job_handle) => {
+
+                let controller = self.controller.clone();
+                let session_id = self.id;
+                let frame_id = *frame_id;
+
+                tokio::spawn(async move {
+                    use Message::FrameRunJobStateUpdate;
+                    let mut stream = job_handle.stream().boxed();
+                    while let Some(Ok(job_state)) = stream.next().await {
+                        let _ = controller.emit(FrameRunJobStateUpdate {
+                            session_id,
+                            frame_id,
+                            job_state
+                        });
+                    }
+                });
+            },
+            Err(_) => todo!(),
+        }
+    }
+
+    async fn append_frame<D>(&self, parent_id: &FrameId, args: NewFrameNodeArgs) -> FrameId {
+        use Message::FrameCreated;
+
+        let frame_id = self.session.lock().frames.append(parent_id, args);
+        self.controller.emit(FrameCreated { session_id: self.id, frame_id });
+        frame_id
+    } 
+}
+
+impl SessionHandler {
+    pub async fn on_frame_created(&self, frame_id: &FrameId) {
+        self.mark_ready_frame(frame_id);
+    }
+
+    pub async fn on_frame_ready(&self, frame_id: &FrameId) {
+        self.run_frame(frame_id).await;
+    }
+
+    pub async fn on_frame_run_update(&self, frame_id: &FrameId, state: JobState<FrameResponse>) {
+        match state {
+            JobState::Completed(response) => {
+
+            },
+            JobState::Failed { error } => {
+                
+            }
+        }
+    }
+
+    pub async fn on_frame_run_terminated(&self, frame_id: &FrameId) {
+        todo!("...")
+    }  
+
+    pub async fn on_frame_terminated(&self, frame_id: &FrameId) {
+        todo!("...")
+    }
+
+    pub async fn on_child_frame_terminated(&self, frame_id: &FrameId, child_id: &FrameId) {
+        todo!("...")
+    }
+}
 
 
 /// Vrai si chaque frame de `iter` (typiquement [`FrameNode::iter_children`])
@@ -637,6 +741,11 @@ enum Message {
     FrameRunTerminated {
         session_id: SessionId,
         frame_id: FrameId,
+    },
+    ChildFrameTerminated {
+        session_id: SessionId,
+        parent_id: FrameId,
+        child_id: FrameId 
     },
     /// Tous les enfants d'un frame ont terminés.
     AllChildrenFrameHaveTerminated {

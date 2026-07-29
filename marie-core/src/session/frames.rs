@@ -1,9 +1,11 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use strum_macros::EnumDiscriminants;
+use serde_json::Value;
+use typed_builder::TypedBuilder;
 
-use crate::{agent::{Context, frame::AgentFrame}, graph::{GraphFrame, GraphId, GraphSpanFrame, GraphSpec, GraphSpecRef, GraphThreadFrame, NodeId, edge::EdgeSpec, frames::{Graph, GraphSpan, GraphThread}, graph::NodeSpec}, hitl::{Hitl, NewHitlFrame}, id::{ID, generate_id}, job::JobState, session::{channel::ChannelName, protocol::FrameResponse, snapshot::{self, SnapshotRef}, spec::CommonSpec}};
+use crate::{id::{ID, generate_id}, job::JobState, session::{channel::ChannelName, protocol::FrameResponse, snapshot::SnapshotRef}};
+
 
 #[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameId(ID);
@@ -12,20 +14,6 @@ impl FrameId {
     pub fn new() -> Self {
         Self(generate_id())
     }
-}
-
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FrameSpec {
-    Graph(GraphSpec),
-    GraphNode(NodeSpec),
-    GraphEdge(EdgeSpec)
-}
-
-
-#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum FrameSpecRef {
-    Graph(GraphSpecRef),
-    Hitl,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -42,21 +30,38 @@ pub enum FrameStatus {
     WaitingChildren
 }
 
-pub struct NewFrameNodeArgs<D: Into<FrameData>> {
-    id: FrameId, 
-    data: D,
-    snapshot: SnapshotRef,
+#[derive(TypedBuilder)]
+pub struct NewFrameNodeArgs {
+    #[builder(default)]
+    inherited_channels: HashMap<ChannelName, Value>,
+    #[builder(default, setter(strip_option))]
+    forked_from: Option<SnapshotRef>,
+    #[builder(default)]
+    child_policy: ChildPolicy,
+    #[builder(default)]
+    barrier: bool,
+    #[builder(default)]
     superstep: u32
+}
+
+#[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ChildPolicy {
+    #[default]
+    // Reduce only on the last terminated child frame
+    Sequential,
+    // Reduce when all the child frames have terminated.
+    FanIn,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameNode {
     pub id: FrameId,
     pub status: FrameStatus,
-    pub data: FrameData,
-    pub snapshot: SnapshotRef,
-    pub inherited_channels: BTreeMap<ChannelName, Value>,
+    pub child_policy: ChildPolicy,
     pub superstep: u32,
+    pub barrier: bool,
+    pub forked_from: Option<SnapshotRef>,
+    pub inherited_channels: HashMap<ChannelName, Value>,
     parent: Option<FrameId>,
     next_sibling: Option<FrameId>,
     prev_sibling: Option<FrameId>,
@@ -75,27 +80,19 @@ impl FrameNode {
     pub fn iter_children(&self) -> impl Iterator<Item=FrameId> {
         self.children.iter().cloned()
     }
-
-    pub fn kind(&self) -> FrameKind {
-        FrameKind::from(&self.data)
-    }
-
-    pub fn spec(&self) -> FrameSpecRef {
-        self.data.sec()
-    }
 }
 
 impl FrameNode {
-    pub fn new<D>(args: NewFrameNodeArgs) -> Self 
-        where D: Into<FrameData>
+    pub fn new(id: FrameId, args: NewFrameNodeArgs) -> Self 
     {
         Self {
-            id: args.id,
-            data: args.data.into(),
-            snapshot: args.snapshot,
+            id,
+            forked_from: args.forked_from,
             status: FrameStatus::default(),
-            inherited_channels: BTreeMap::default(),
-            superstep: u32,
+            inherited_channels: args.inherited_channels,
+            superstep: args.superstep,
+            child_policy: args.child_policy,
+            barrier: args.barrier,
             parent: None,
             next_sibling: None,
             prev_sibling: None,
@@ -105,70 +102,6 @@ impl FrameNode {
 }
 
 
-pub enum NewFrame {
-    Graph(GraphFrame),
-    GraphSpan(GraphSpanFrame),
-    GraphThread(GraphThreadFrame),
-    Hitl(NewHitlFrame),
-}
-
-impl NewFrame {
-    fn into_node(self, id: FrameId) -> FrameNode {
-        match self {
-            NewFrame::Graph(frame) => {
-                FrameNode::new(NewFrameNodeArgs {
-                    id,
-                    data: frame.data,
-                    snapshot: frame.snapshot,
-                })
-            },
-            NewFrame::GraphSpan(frame) => {
-                FrameNode::new(NewFrameNodeArgs {
-                    id,
-                    data: frame.data,
-                    snapshot: frame.snapshot
-                })
-            },
-            NewFrame::GraphThread(frame) => {
-                FrameNode::new(NewFrameNodeArgs {
-                    id,
-                    data: frame.data,
-                    snapshot: frame.snapshot
-                })
-            },
-            NewFrame::Hitl(frame) => {
-                FrameNode::new(NewFrameNodeArgs {
-                    id,
-                    data: frame.data,
-                    snapshot: frame.snapshot
-                })
-            },
-        }
-    }
-
-
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, EnumDiscriminants)]
-#[strum_discriminants(name(FrameKind))]
-pub enum FrameData {
-    Graph(Graph),
-    GraphSpan(GraphSpan),
-    GraphThread(GraphThread),
-    Hitl(Hitl)
-}
-
-impl FrameData {
-    pub fn spec(&self) -> FrameSpecRef {
-        match self {
-            FrameData::Graph(graph) => graph.spec.into(),
-            FrameData::GraphSpan(graph_span) => graph_span.spec.into(),
-            FrameData::GraphThread(graph_thread) => graph_thread.spec.into(),
-            FrameData::Hitl(hitl) => FrameSpecRef::Hitl,
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FrameTree {
     pub root: Option<FrameId>,
@@ -176,25 +109,25 @@ pub struct FrameTree {
 }
 
 impl FrameTree {
-    pub fn set_root(&mut self, frame: impl Into<NewFrame>) -> FrameId {
-        let id = self.create_node(frame);
+    pub fn set_root(&mut self, args: NewFrameNodeArgs) -> FrameId {
+        let id = self.create_node(args);
         self.root = Some(id);
         id
     }
 
-    pub fn insert(&mut self, parent: &FrameId, frame: impl Into<NewFrame>, position: usize) -> FrameId {
-        let id = self.create_node(frame);
+    pub fn insert(&mut self, parent: &FrameId, args: NewFrameNodeArgs, position: usize) -> FrameId {
+        let id = self.create_node(args);
         self.insert_child(parent, &id, position);
         id
     }
 
-    pub fn append(&mut self, parent: &FrameId, frame: impl Into<NewFrame>) -> FrameId {
+    pub fn append(&mut self, parent: &FrameId, args: NewFrameNodeArgs) -> FrameId {
         let position = self
             .arena
             .get(parent)
             .map(|node| node.children.len())
             .unwrap_or(0);
-        self.insert(parent, frame, position)
+        self.insert(parent, args, position)
     }
 
     pub fn get<'tree>(&'tree self, id: &FrameId) -> &'tree FrameNode {
@@ -249,10 +182,9 @@ impl FrameTree {
 }
 
 impl FrameTree {
-    fn create_node(&mut self, frame: impl Into<NewFrame>) -> FrameId {
+    fn create_node(&mut self, args: NewFrameNodeArgs) -> FrameId {
         let id = FrameId::new();
-        let frame = frame.into();
-        let node = frame.into_node(id);
+        let node = FrameNode::new(id, args);
         self.arena.insert(id, node);
         id
     }

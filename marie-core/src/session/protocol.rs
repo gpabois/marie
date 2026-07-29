@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{graph::NodeId, hitl::protocol::HitlRequest, session::frames::{NewFrame, FrameId}};
+use crate::{graph::NodeId, hitl::protocol::HitlRequest, session::frames::FrameId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct FrameResponse {
@@ -11,7 +11,7 @@ pub struct FrameResponse {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum FrameResult {
     RunExhausted,
-    Yield(Vec<NewFrame>),
+    Yield(),
     /// Commandes liées au système de graphes
     ExecuteGraphCommand(GraphCommand),
     Completed

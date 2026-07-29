@@ -439,7 +439,7 @@ fn expand_one(item: Item, crate_path: &TokenStream2, kind: &Kind) -> syn::Result
             (executor_struct, non_executor_struct, None, executor_new, non_executor_new)
         }
         SelfFields::Named(fields) => {
-            let args_struct_name = format_ident!("{}Args", struct_name, span = struct_name.span());
+            let args_struct_name = format_ident!("{}Params", struct_name, span = struct_name.span());
             let field_names: Vec<&Ident> = fields.iter().map(|(name, _)| name).collect();
             let field_types: Vec<&Type> = fields.iter().map(|(_, ty)| ty).collect();
 
