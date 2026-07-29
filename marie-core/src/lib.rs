@@ -32,5 +32,6 @@ pub mod hrw;
 pub mod post;
 pub mod catalog;
 pub mod stream;
+pub mod script;
 
 pub use error::{Context, Error, Result};

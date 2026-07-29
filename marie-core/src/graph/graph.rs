@@ -1,9 +1,14 @@
+use std::hash::Hash;
 use std::{borrow::Borrow, collections::HashMap, fmt};
 
 use serde::{Deserialize, Serialize};
 
-use crate::catalog::Catalogable;
-use crate::graph::{NodeId, edge::Edge, node::NodeName};
+use crate::catalog::{CatalogItemRef, Catalogable};
+use crate::graph::edge::Reducer;
+use crate::graph::{NodeId, edge::EdgeSpec, node::NodeName};
+use crate::script::Javascript;
+use crate::session::channel::ChannelSpec;
+use crate::session::spec::CommonSpec;
 
 pub trait GraphState: Clone {}
 
@@ -49,10 +54,19 @@ impl AsRef<[u8]> for GraphId {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct GraphRef(CatalogItemRef);
+
+pub enum NodeKind {
+    Native(String),
+    Script(Javascript)
+}
+
 #[derive(Clone, Serialize, Deserialize)]
-pub struct NodeParams {
-    pub name: NodeName,
+pub struct NodeSpec {
+    pub kind: NodeKind,
     pub args: serde_json::Value,
+    pub common: CommonSpec,
 }
 
 /// Déclaration d'un graphe (nodes/edges/point d'entrée), publiée dans le
@@ -62,35 +76,35 @@ pub struct NodeParams {
 /// ne porte aucun secret, contrairement à
 /// [`crate::model::EncryptedModel`].
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Graph {
+pub struct GraphSpec {
     pub id: GraphId,
-    pub nodes: HashMap<NodeId, NodeParams>,
-    pub edges: HashMap<NodeId, Edge>,
-    pub entry: NodeId,
-    pub max_steps: u32,
+    pub nodes: HashMap<NodeId, NodeSpec>,
+    pub edges: HashMap<NodeId, EdgeSpec>,
+    pub entry: Option<NodeId>,
+    pub common: CommonSpec
 }
 
-impl Graph {
-    pub fn new(id: GraphId, entry: NodeId, max_steps: u32) -> Self {
+impl GraphSpec {
+    pub fn new(id: GraphId,  common: CommonSpec) -> Self {
         Self {
             id,
             nodes: HashMap::new(),
             edges: HashMap::new(),
-            entry,
-            max_steps,
+            entry: None,
+            common
         }
     }
 
-    pub fn add_node(&mut self, id: NodeId, params: NodeParams) {
+    pub fn add_node(&mut self, id: NodeId, params: NodeSpec) {
         self.nodes.insert(id, params);
     }
 
-    pub fn add_edge(&mut self, from: NodeId, edge: Edge) {
+    pub fn add_edge(&mut self, from: NodeId, edge: EdgeSpec) {
         self.edges.insert(from, edge);
     }
 }
 
-impl Catalogable for Graph {
+impl Catalogable for GraphSpec {
     const KIND: &str = "/marie/catalog/graphs";
 
     fn id(&self) -> &str {

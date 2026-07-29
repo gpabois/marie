@@ -9,9 +9,9 @@ use crate::{
     agent::context::ContextEntry, 
     events::EventService, 
     graph::{GraphSpanFrame, GraphThreadFrame}, 
-    hitl::HitlFrame, 
+    hitl::NewHitlFrame, 
     job::JobState, 
-    session::{controller::Message::FrameCreated, frames::{Frame, FrameId, FrameStatus, FrameTree},
+    session::{controller::Message::FrameCreated, frames::{NewFrame, FrameId, FrameStatus, FrameTree},
     protocol::{FrameResponse, GraphCommand}, store::SessionStore, worker::RunFrame}, store::PgStore, worker::WorkerClient
 };
 
@@ -139,23 +139,23 @@ impl SessionController {
 
         match msg {
             FrameCreated { session_id, frame_id } 
-                => self.handle_created_frame(session_id, frame_id).await,
+                => self.on_frame_created(session_id, frame_id).await,
             // Une frame a terminé (done ou failed)
             // 1. On vérifie si une frame parent attend que ses enfants aient terminés
             // 2. Si tous les enfants ont terminés, on va envoyer un message-évènement `AllChildrenFrameHaveTerminated`
             FrameTerminated { session_id, frame_id } 
-                => self.handle_terminated_frame(session_id, frame_id).await,
+                => self.on_terminated_frame(session_id, frame_id).await,
             // On aggrège les sorties des enfants et on injecte dans dans le contexte de la frame parent.
             AllChildrenFrameHaveTerminated { session_id, parent_id } 
-                => self.handle_all_terminated_children(session_id, parent_id).await,
+                => self.on_all_terminated_children(session_id, parent_id).await,
             // On va déclencher un run
             FrameReady { session_id, frame_id } 
-                => self.handle_ready_frame(session_id, frame_id),
+                => self.on_frame_ready(session_id, frame_id),
             // On a terminé un run
             FrameRunJobStateUpdate { session_id, frame_id, job_state}
-                => self.handle_frame_run_update(session_id, frame_id, job_state).await,
+                => self.on_frame_run_update(session_id, frame_id, job_state).await,
             FrameRunTerminated { session_id, frame_id } 
-                => self.handle_terminated_frame(session_id, frame_id).await
+                => self.on_terminated_frame(session_id, frame_id).await
         }
     }
 
@@ -169,7 +169,7 @@ impl SessionController {
     /// ```ignore
     /// self.handle_created_frame(session_id, frame_id).await;
     /// ```
-    async fn handle_created_frame(&self, session_id: SessionId, frame_id: FrameId) {
+    async fn on_frame_created(&self, session_id: SessionId, frame_id: FrameId) {
         self.mark_frame_as_ready(session_id, frame_id).await
     }
 
@@ -207,7 +207,7 @@ impl SessionController {
     /// ```ignore
     /// self.handle_terminated_frame_run(session_id, frame_id).await;
     /// ```
-    async fn handle_terminated_frame_run(&self, session_id: SessionId, frame_id: FrameId) {
+    async fn on_frame_run_terminated(&self, session_id: SessionId, frame_id: FrameId) {
         use FrameStatus::{RunFailed, RunCompleted};
         use Message::FrameTerminated;
 
@@ -255,7 +255,7 @@ impl SessionController {
     /// ```ignore
     /// self.handle_frame_run_update(session_id, frame_id, job_state).await;
     /// ```
-    async fn handle_frame_run_update(&self, session_id: SessionId, frame_id: FrameId, job_state: JobState<FrameResponse>) {
+    async fn on_frame_run_update(&self, session_id: SessionId, frame_id: FrameId, job_state: JobState<FrameResponse>) {
         use Message::FrameRunTerminated;
 
         let Ok(session) = self.get(&session_id).await else { return };
@@ -293,7 +293,7 @@ impl SessionController {
     /// ```ignore
     /// self.handle_ready_frame(session_id, frame_id);
     /// ```
-    fn handle_ready_frame(&self, session_id: SessionId, frame_id: FrameId) {
+    fn on_frame_ready(&self, session_id: SessionId, frame_id: FrameId) {
         let _ = tokio::spawn(self.clone().run_frame(session_id, frame_id));      
     }
 
@@ -310,7 +310,7 @@ impl SessionController {
     /// ```ignore
     /// self.handle_all_terminated_children(session_id, parent_id).await;
     /// ```
-    async fn handle_all_terminated_children(&self, session_id: SessionId, parent_id: FrameId) {
+    async fn on_all_terminated_children(&self, session_id: SessionId, parent_id: FrameId) {
         {
             let Ok(session) = self.get(&session_id).await else { return };
             let mut guard = session.lock();
@@ -340,12 +340,13 @@ impl SessionController {
     /// ```ignore
     /// self.handle_terminated_frame(session_id, frame_id).await;
     /// ```
-    async fn handle_terminated_frame(&self, session_id: SessionId, frame_id: FrameId) {
+    async fn on_terminated_frame(&self, session_id: SessionId, frame_id: FrameId) {
         use Message::AllChildrenFrameHaveTerminated;
 
         let Ok(session) = self.get(&session_id).await else { return };
         let guard = session.lock();
         let Some(parent_id) = guard.frames.parent_of(&frame_id) else { return };
+        
         let parent = guard.frames.get(&parent_id);
         
         if all_have_terminated(&guard.frames, parent.iter_children()) {
@@ -372,7 +373,7 @@ impl SessionController {
     ///     .append_frame(session_id, HitlFrame::text(), Some(parent_frame_id))
     ///     .await;
     /// ```
-    async fn append_frame(&self, session_id: SessionId, frame: impl Into<Frame>, parent: Option<FrameId>) -> Option<FrameId> {
+    async fn append_frame(&self, session_id: SessionId, frame: impl Into<NewFrame>, parent: Option<FrameId>) -> Option<FrameId> {
         let Ok(session) = self.get(&session_id).await else { return None };
         let mut guard = session.lock();
         
@@ -413,7 +414,7 @@ impl SessionController {
             RunExhausted => {
                 let mut guard = session.lock();
 
-                guard.frames.append(&response.frame_id, HitlFrame::text());
+                guard.frames.append(&response.frame_id, NewHitlFrame::text());
                 guard.frames.get_mut(&response.frame_id).status = FrameStatus::WaitingChildren;
                 
                 drop(guard);
@@ -596,6 +597,8 @@ impl SessionController {
         Ok(result)
     }
 }
+
+
 
 /// Vrai si chaque frame de `iter` (typiquement [`FrameNode::iter_children`])
 /// a atteint un statut terminal (voir [`FrameNode::has_terminated`]) —

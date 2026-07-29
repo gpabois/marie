@@ -25,7 +25,7 @@ impl Router {
 }
 
 #[derive(Clone, Serialize, Deserialize)]
-pub enum Edge {
+pub enum EdgeSpec {
     /// Transition inconditionnelle vers une node fixe.
     Direct(NodeId),
     /// Transition décidée dynamiquement à partir de l'état courant.

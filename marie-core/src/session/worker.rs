@@ -1,6 +1,6 @@
 use marie_macros::core_job;
 
-use crate::{graph::Graphs, model::Models, session::{frames::{Frame, FrameId}, protocol::FrameResponse}, tools::Tools};
+use crate::{graph::Graphs, model::Models, session::{frames::{NewFrame, FrameId}, protocol::FrameResponse}, tools::Tools};
 
 core_job! {
     #[job(name="/marie/sessions/jobs/run-frame")]

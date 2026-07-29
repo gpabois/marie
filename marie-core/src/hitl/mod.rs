@@ -4,7 +4,7 @@ pub mod protocol;
 pub use model::{Question, Answer, QuestionKind};
 use serde::{Deserialize, Serialize};
 
-use crate::session::frames::Frame;
+use crate::session::{frames::{FrameData, NewFrame}, snapshot::SnapshotRef};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Hitl {
@@ -12,21 +12,30 @@ pub enum Hitl {
     Text
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct HitlFrame(Hitl);
-
-impl From<HitlFrame> for Frame {
-    fn from(value: HitlFrame) -> Self {
-        Frame::Hitl(value)
+impl From<Hitl> for FrameData {
+    fn from(value: Hitl) -> Self {
+        FrameData::Hitl(value)
     }
 }
 
-impl HitlFrame {
-    pub fn question(question: Question) -> HitlFrame {
-        HitlFrame(Hitl::Question(question))
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct NewHitlFrame {
+    pub snapshot: SnapshotRef,
+    pub data: Hitl
+}
+
+impl From<NewHitlFrame> for NewFrame {
+    fn from(value: NewHitlFrame) -> Self {
+        NewFrame::Hitl(value)
+    }
+}
+
+impl NewHitlFrame {
+    pub fn question(question: Question) -> NewHitlFrame {
+        NewHitlFrame(Hitl::Question(question))
     }
 
-    pub fn text() -> HitlFrame {
-        HitlFrame(Hitl::Text)
+    pub fn text() -> NewHitlFrame {
+        NewHitlFrame(Hitl::Text)
     }
 }
