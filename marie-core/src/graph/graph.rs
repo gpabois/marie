@@ -4,10 +4,8 @@ use std::{borrow::Borrow, collections::HashMap, fmt};
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::{CatalogItemRef, Catalogable};
-use crate::graph::edge::Reducer;
-use crate::graph::{NodeId, edge::EdgeSpec, node::NodeName};
+use crate::graph::NodeId;
 use crate::script::Javascript;
-use crate::session::channel::ChannelSpec;
 use crate::session::spec::CommonSpec;
 
 pub trait GraphState: Clone {}
@@ -54,18 +52,32 @@ impl AsRef<[u8]> for GraphId {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
-pub struct GraphRef(CatalogItemRef);
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct GraphRef(pub(crate) CatalogItemRef);
 
+impl GraphRef {
+    /// Accès à la [`CatalogItemRef`] sous-jacente pour
+    /// [`crate::graph::Graphs::get`] — `graph::mod` (module parent de
+    /// celui-ci) n'a pas accès au champ privé de `GraphRef` par simple
+    /// portée de module, contrairement à `GraphSpecRef` qui y est défini
+    /// directement.
+    pub(crate) fn catalog_ref(&self) -> &CatalogItemRef {
+        &self.0
+    }
+}
+
+#[derive(Clone, Serialize, Deserialize)]
 pub enum NodeKind {
     Native(String),
-    Script(Javascript)
+    Script {
+        params: serde_json::Value,
+        source: String
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 pub struct NodeSpec {
     pub kind: NodeKind,
-    pub args: serde_json::Value,
     pub common: CommonSpec,
 }
 
@@ -79,18 +91,18 @@ pub struct NodeSpec {
 pub struct GraphSpec {
     pub id: GraphId,
     pub nodes: HashMap<NodeId, NodeSpec>,
-    pub edges: HashMap<NodeId, EdgeSpec>,
-    pub entry: Option<NodeId>,
+    pub edges: HashMap<NodeId, NodeId>,
+    pub entry: NodeId,
     pub common: CommonSpec
 }
 
 impl GraphSpec {
-    pub fn new(id: GraphId,  common: CommonSpec) -> Self {
+    pub fn new(id: GraphId, entry: impl Into<NodeId>, common: CommonSpec) -> Self {
         Self {
             id,
             nodes: HashMap::new(),
             edges: HashMap::new(),
-            entry: None,
+            entry: entry.into(),
             common
         }
     }
@@ -99,9 +111,6 @@ impl GraphSpec {
         self.nodes.insert(id, params);
     }
 
-    pub fn add_edge(&mut self, from: NodeId, edge: EdgeSpec) {
-        self.edges.insert(from, edge);
-    }
 }
 
 impl Catalogable for GraphSpec {

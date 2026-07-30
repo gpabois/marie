@@ -4,41 +4,14 @@ pub mod checkpoint;
 pub mod graph;
 pub mod server;
 pub mod reducer;
-pub mod frames;
-
 use std::borrow::Borrow;
 
-use bytemuck::{Pod, Zeroable};
-pub use graph::{GraphSpec, GraphId};
+pub use graph::{GraphSpec, GraphId, GraphRef};
 pub use node::NodeId;
-use schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
 
-use crate::{
-    catalog::{Catalog, CatalogError, CatalogItemRef}, id::ID, session::{SessionId, frames::NewFrame},
-};
-
-pub enum Goto {
-    Node(NodeId),
-    FanOut(Vec<NodeId>)
-}
-
-pub enum Halt {
-    Terminated,
-    Failed(String)
-}
-
-
-pub type GraphName = String;
-
-
-
-/// Référence immuable vers une version publiée d'un [`Graph`] — même rôle
-/// que [`crate::model::ModelRef`] : une poignée opaque à conserver côté
-/// appelant plutôt que l'`id`/version bruts, pour ne pas coupler ce dernier
-/// au détail de représentation de [`CatalogItemRef`].
-#[derive(Clone)]
-pub struct GraphSpecRef(CatalogItemRef);
+use crate::
+    catalog::{Catalog, CatalogError} 
+;
 
 /// Catalogue des déclarations de [`Graph`] connues du cluster — sur le même
 /// principe que [`crate::model::Models`]/[`crate::expert::Experts`] : un
@@ -57,16 +30,16 @@ impl Graphs {
     }
 
     /// Publie la première version d'un graphe.
-    pub async fn insert(&self, graph: GraphSpec) -> Result<GraphSpecRef, CatalogError> {
-        Ok(GraphSpecRef(self.catalog.publish(graph).await?))
+    pub async fn insert(&self, graph: GraphSpec) -> Result<GraphRef, CatalogError> {
+        Ok(GraphRef(self.catalog.publish(graph).await?))
     }
 
     /// Publie une nouvelle version d'un graphe déjà connu — contrairement à
     /// [`Self::insert`], échoue avec [`CatalogError::NotFound`] si
     /// `graph.id` n'a encore aucune version active.
-    pub async fn replace(&self, graph: GraphSpec) -> Result<GraphSpecRef, CatalogError> {
+    pub async fn replace(&self, graph: GraphSpec) -> Result<GraphRef, CatalogError> {
         self.catalog.latest_ref::<GraphSpec>(graph.id.borrow()).await?;
-        Ok(GraphSpecRef(self.catalog.publish(graph).await?))
+        Ok(GraphRef(self.catalog.publish(graph).await?))
     }
 
     /// Soft-delete (voir [`Catalog::delete`]) la version active de `id`.
@@ -77,21 +50,25 @@ impl Graphs {
 
     /// Référence de la version active la plus récente de `id`, sans lire son
     /// contenu — voir [`Self::get`] pour la déclaration désérialisée.
-    pub async fn latest(&self, id: &GraphId) -> Result<Option<GraphSpecRef>, CatalogError> {
+    pub async fn latest(&self, id: &GraphId) -> Result<Option<GraphRef>, CatalogError> {
         match self.catalog.latest_ref::<GraphSpec>(id.borrow()).await {
-            Ok(r) => Ok(Some(GraphSpecRef(r))),
+            Ok(r) => Ok(Some(GraphRef(r))),
             Err(CatalogError::NotFound { .. }) => Ok(None),
             Err(err) => Err(err),
         }
     }
 
-    /// Version active la plus récente de `id`, désérialisée.
-    pub async fn get(&self, id: &GraphId) -> Result<Option<GraphSpec>, CatalogError> {
-        match self.catalog.latest::<GraphSpec>(id.borrow()).await {
-            Ok(item) => Ok(Some((*item).clone())),
-            Err(CatalogError::NotFound { .. }) => Ok(None),
-            Err(err) => Err(err),
-        }
+    /// Contenu désérialisé référencé par `r` — contrairement à l'ancienne
+    /// version indexée par [`GraphId`] (qui résolvait implicitement la
+    /// version active la plus récente via [`Catalog::latest`], d'où
+    /// l'`Option` pour le cas où `id` n'a encore aucune version publiée),
+    /// `r` désigne déjà une version précise (voir [`Catalog::deref`]) : un
+    /// échec ici veut dire que cette version a été supprimée, pas qu'elle
+    /// n'a jamais existé — donc plus d'`Option`, une [`CatalogError`]
+    /// suffit (même convention que [`Catalog::deref`] lui-même).
+    pub async fn get(&self, r: &GraphRef) -> Result<GraphSpec, CatalogError> {
+        let item = self.catalog.deref::<GraphSpec>(r.catalog_ref()).await?;
+        Ok((*item).clone())
     }
 
     pub async fn list(&self) -> Result<Vec<GraphSpec>, CatalogError> {

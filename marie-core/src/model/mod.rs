@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    agent::{AgentFrameId, Context}, catalog::{Catalog, CatalogError, CatalogItemRef}, model::model::Model, secret::vault::{Vault, VaultError}, tools::{ModelToolCall, ToolCall, ToolCallId, ToolDefinition as MarieTool}
+    agent::{AgentFrameId, Context}, catalog::{Catalog, CatalogError, CatalogItemRef}, model::model::Model, secret::vault::{Vault, VaultError}, tools::{RequestToolCall, ToolCall, ToolCallId, ToolDefinition as MarieTool}
 };
 
 pub mod model;
@@ -181,7 +181,7 @@ pub struct ModelUsage {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ModelResponse {
     pub text: Option<String>,
-    pub tool_calls: Vec<ModelToolCall>,
+    pub tool_calls: Vec<RequestToolCall>,
     pub usage: Option<ModelUsage>,
 }
 
@@ -267,7 +267,7 @@ pub async fn execute(model: Model, tools: Vec<MarieTool>, input: impl ToString) 
             (None, Some(response)) => {
                 let text = response.output_text();
                 let tool_calls = response.output.into_iter().filter_map(|item| match item {
-                    OutputItem::FunctionCall(call) => Some(ModelToolCall {
+                    OutputItem::FunctionCall(call) => Some(RequestToolCall {
                         id: ToolCallId::new(crate::id::generate_id()),
                         name: call.name,
                         parameters: serde_json::from_str(&call.arguments).unwrap_or_default(),

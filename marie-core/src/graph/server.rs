@@ -3,7 +3,12 @@ use std::{collections::HashMap, sync::Arc};
 use parking_lot::Mutex;
 use serde::de::DeserializeOwned;
 
-use crate::{di::{Factory, Get, Resolve}, expert::ExpertClient, graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, model::ModelClient, worker::client::WorkerClient};
+use crate::{
+    di::{Factory, Get, Resolve}, 
+    expert::Experts, 
+    graph::node::{self, Nodable, NodeDefinition, NodeFactory, NodeName}, 
+    model::Models
+};
 
 
 #[derive(Clone)]
@@ -16,7 +21,7 @@ pub struct GraphServer<D>
 
 impl<D> Factory<D> for GraphServer<D> 
     where
-        D: Resolve<ExpertClient> + Resolve<ModelClient> + Get<WorkerClient> + Clone + Send + Sync + 'static
+        D: Resolve<Experts> + Resolve<Models> + Clone + Send + Sync + 'static
 {
     fn create(container: &D) -> Self {
         let server = Self {

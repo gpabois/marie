@@ -4,7 +4,7 @@ use bytemuck::{Pod, Zeroable};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use crate::{id::ID, session::frames::FrameTree};
+use crate::{id::ID, session::frames::FrameId};
 
 #[derive(Debug, Hash, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Pod, Zeroable, JsonSchema)]
 #[repr(C)]
@@ -59,7 +59,11 @@ impl AsRef<[u8]> for SessionId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
-    pub frames: FrameTree,
+    pub root_frame: Option<FrameId>,
+    /// Statut de haut niveau de la session — indépendant de
+    /// [`crate::session::frames::FrameStatus`], qui suit l'état d'un frame
+    /// individuel de son arbre, pas la session dans son ensemble.
+    pub status: SessionStatus,
     /// Horodatage géré par le store (voir
     /// `session::store::SessionStore::insert`), pas par l'appelant : toute
     /// valeur posée ici avant un `insert` est ignorée, écrasée par l'heure
@@ -69,4 +73,13 @@ pub struct Session {
     /// `insert`/`replace` (voir `session::store::SessionStore::replace`),
     /// contrairement à `created_at` qu'un `replace` laisse intact.
     pub last_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub enum SessionStatus {
+    #[default]
+    Pending,
+    Archived,
+    Ongoing,
+    Failed(String)
 }

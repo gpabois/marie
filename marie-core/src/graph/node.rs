@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::{
-    bail, di::{Get, Resolve}, expert::{ExpertClient, ExpertId}, graph::{Goto, GraphFrameId, Halt, server::GraphServer}, id::ID, model::ModelClient, state::{State, StateTransaction}, worker::client::WorkerClient
+    bail, di::{Get, Resolve}, expert::ExpertId, graph::server::GraphServer, id::ID, state::{State, StateTransaction}, worker::client::WorkerClient
 };
 
 pub type NodeName = String;
@@ -22,7 +22,20 @@ pub struct NodeDefinition {
     schema: serde_json::Value
 }
 
-pub type NodeId = ID;
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct NodeId(String);
+
+impl From<&str> for NodeId {
+    fn from(value: &str) -> Self {
+        Self(value.to_owned())
+    }
+}
+
+impl From<String> for NodeId {
+    fn from(value: String) -> Self {
+        Self(value)
+    }
+}
 
 #[derive(Clone)]
 pub struct NodeContext<D> {

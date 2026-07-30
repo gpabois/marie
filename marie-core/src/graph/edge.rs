@@ -19,7 +19,7 @@ impl Router {
         self.0
             .iter()
             .filter(|(id, cond)| cond.check(state))
-            .map(|(id, _)| *id)
+            .map(|(id, _)| id.clone())
             .collect()
     }
 }

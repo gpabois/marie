@@ -2,6 +2,8 @@ use std::cmp::Ordering;
 
 use libp2p::PeerId;
 
+use crate::node::NodeId;
+
 pub trait Pickable {
     /// Identifiant stable (PeerId encodé, adresse, nom de shard...).
     fn id_bytes(&self) -> Vec<u8>;
@@ -15,6 +17,12 @@ pub trait Pickable {
 impl Pickable for PeerId {
     fn id_bytes(&self) -> Vec<u8> {
         self.to_bytes()
+    }
+}
+
+impl Pickable for NodeId {
+    fn id_bytes(&self) -> Vec<u8> {
+        self.as_ref().to_vec()
     }
 }
 

@@ -9,4 +9,4 @@ pub mod snapshot;
 pub mod channel;
 pub mod spec;
 
-pub use model::{SessionId, Session};
+pub use model::{SessionId, Session, SessionStatus};

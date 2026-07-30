@@ -16,7 +16,7 @@ use bytemuck::{Pod, Zeroable};
 use schemars::{JsonSchema, schema_for};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use crate::{agent::AgentFrameId, catalog::{Catalog, CatalogError, CatalogItemRef, Catalogable}, id::ID, job::JobId, worker::{JobResult, server::WorkerServer}, events::EventEnvelope, tools::client::ToolError};
+use crate::{agent::AgentFrameId, catalog::{Catalog, CatalogError, CatalogItemRef, Catalogable}, id::ID, job::JobId, events::EventEnvelope, tools::client::ToolError};
 
 pub use rpc::{ExecuteTool, GetTool, InsertTool, ListTool, RemoveTool, UpdateTool};
 pub use marie_macros::core_tool;
@@ -223,14 +223,12 @@ pub struct ToolCall {
     pub parameters: Value
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ModelToolCall {
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RequestToolCall {
     pub id: ToolCallId,
     pub name: ToolName,
     pub parameters: Value
 }
-
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolCallError {
@@ -247,10 +245,6 @@ pub enum ToolCallResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum ToolEvent {
-    JobDone {
-        id: JobId, 
-        result: JobResult
-    },
     ToolExecutionDone {
         id: ToolCallId,
         result: ToolCallResult
