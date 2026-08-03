@@ -1,4 +1,6 @@
 
+use std::fmt;
+
 use async_trait::async_trait;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
@@ -8,7 +10,27 @@ use crate::{id::ID, node::NodeId, worker::{WorkerError}};
 
 pub use marie_macros::core_job;
 
-pub type JobId = ID;
+#[derive(Debug, Hash, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct JobId(ID);
+
+impl fmt::Display for JobId {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+impl AsRef<[u8]> for JobId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_bytes()
+    }
+}
+
+impl From<ID> for JobId {
+    fn from(value: ID) -> Self {
+        Self(value)
+    }
+}
+
 // Diffusé sur Gossipsub par le Control Plane
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct JobInstance {

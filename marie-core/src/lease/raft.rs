@@ -113,6 +113,7 @@ impl RemoteProcedureCall for RaftVote {
     type Args = VoteRequest<LeaseNodeId>;
     type Return = Result<VoteResponse<LeaseNodeId>, RaftError<LeaseNodeId>>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, args: Self::Args, _caller: crate::node::NodeId) -> Self::Return {
         self.0.vote(args).await
     }
@@ -127,6 +128,7 @@ impl RemoteProcedureCall for RaftAppendEntries {
     type Args = AppendEntriesRequest<LeaseTypeConfig>;
     type Return = Result<AppendEntriesResponse<LeaseNodeId>, RaftError<LeaseNodeId>>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, args: Self::Args, _caller: crate::node::NodeId) -> Self::Return {
         self.0.append_entries(args).await
     }
@@ -141,6 +143,7 @@ impl RemoteProcedureCall for RaftInstallSnapshot {
     type Args = InstallSnapshotRequest<LeaseTypeConfig>;
     type Return = Result<InstallSnapshotResponse<LeaseNodeId>, RaftError<LeaseNodeId, openraft::error::InstallSnapshotError>>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, args: Self::Args, _caller: crate::node::NodeId) -> Self::Return {
         self.0.install_snapshot(args).await
     }

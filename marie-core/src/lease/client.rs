@@ -31,6 +31,7 @@ impl RemoteProcedureCall for SubmitLease {
     type Args = LeaseRequest;
     type Return = Result<LeaseResult, RaftError<LeaseNodeId, ClientWriteError<LeaseNodeId, crate::node::NodeId>>>;
 
+    #[cfg(feature = "rpc-executor")]
     async fn execute(self, args: Self::Args, _caller: crate::node::NodeId) -> Self::Return {
         self.0.client_write(args).await.map(|response| response.data)
     }

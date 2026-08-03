@@ -1,17 +1,23 @@
 pub mod node;
-pub mod edge;
-pub mod checkpoint;
 pub mod graph;
-pub mod server;
 pub mod reducer;
-use std::borrow::Borrow;
+#[cfg(feature = "node-executor")]
+pub mod executor;
+pub mod builtin;
+pub mod script;
+pub mod run_log_macros;
+use std::{borrow::Borrow, collections::HashMap, sync::Arc};
+
+use parking_lot::Mutex;
 
 pub use graph::{GraphSpec, GraphId, GraphRef};
-pub use node::NodeId;
+pub use node::{NodeKindId, NodeId, NodeSpec};
 
 use crate::
-    catalog::{Catalog, CatalogError} 
+    catalog::{Catalog, CatalogError}
 ;
+use crate::di::{Constructible, Resolve};
+use crate::session::spec::CommonSpec;
 
 /// Catalogue des déclarations de [`Graph`] connues du cluster — sur le même
 /// principe que [`crate::model::Models`]/[`crate::expert::Experts`] : un
@@ -19,14 +25,80 @@ use crate::
 /// graphe n'a (contrairement à une session) pas besoin d'être écrit en
 /// continu ni fusionné entre pairs. Contrairement à `Models`, aucun secret à
 /// chiffrer (voir [`Graph`]), donc pas de `Vault` à porter.
+///
+/// Porte aussi, sur le même principe que [`crate::tools::Tools`], le
+/// registre des nodes natives ([`Nodable`](node::Nodable)) enregistrées en
+/// mémoire par le process via [`node::Nodable::register`] : `native_nodes`
+/// pour leur [`CommonSpec`] (toujours disponible, pour que la déclaration
+/// d'une [`GraphSpec`] référençant cette node puisse être validée même sans
+/// pouvoir l'exécuter), `executors` (derrière la feature `node-executor`)
+/// pour l'exécution proprement dite.
 #[derive(Clone)]
 pub struct Graphs {
-    catalog: Catalog
+    catalog: Catalog,
+    #[cfg(feature = "node-executor")]
+    pub(crate) executors: executor::NodeExecutors,
+    pub(crate) native_nodes: Arc<Mutex<HashMap<NodeKindId, CommonSpec>>>
+}
+
+impl<C> Constructible<C> for Graphs where C: Resolve<Catalog> {
+    fn construct(container: &C, _: ()) -> Self {
+        Self::new(container.resolve(()))
+    }
 }
 
 impl Graphs {
+    #[cfg(not(feature = "node-executor"))]
     pub fn new(catalog: Catalog) -> Self {
-        Self { catalog }
+        Self { catalog, native_nodes: Arc::new(Mutex::new(HashMap::default())) }
+    }
+
+    #[cfg(feature = "node-executor")]
+    pub fn new(catalog: Catalog) -> Self {
+        Self {
+            catalog,
+            executors: executor::NodeExecutors::default(),
+            native_nodes: Arc::new(Mutex::new(HashMap::default()))
+        }
+    }
+
+    /// Enregistre une node native sans exécuteur — voir
+    /// [`node::Nodable::register`] (variante sans la feature
+    /// `node-executor`).
+    #[cfg(not(feature = "node-executor"))]
+    pub fn register(&self, id: NodeKindId, spec: CommonSpec) {
+        self.native_nodes.lock().insert(id, spec);
+    }
+
+    /// Enregistre une node native et son exécuteur — voir
+    /// [`node::Nodable::register`] (variante avec la feature
+    /// `node-executor`).
+    #[cfg(feature = "node-executor")]
+    pub fn register<F, Fut>(&self, id: NodeKindId, spec: CommonSpec, executor: F)
+        where
+            F: Fn(node::NodeContext) -> Fut + Send + Sync + 'static,
+            Fut: Future<Output = crate::Result<(node::NodeContext, crate::session::protocol::FrameResult)>> + Send + 'static
+    {
+        self.native_nodes.lock().insert(id.clone(), spec);
+        self.executors.add(id, executor);
+    }
+
+    /// Exécute la node native désignée par `spec.kind` — voir
+    /// [`node::Nodable::register`]. Les surcharges de canaux propres à cette
+    /// instance du node (`spec.common.overrides_channels`, voir
+    /// [`CommonSpec::overrides_channels`]) sont déjà appliquées sur `ctx` par
+    /// `SessionHandler` avant l'appel : `Graphs` reste indépendante de la
+    /// notion de session/frame et n'a donc rien à y appliquer elle-même.
+    #[cfg(feature = "node-executor")]
+    pub async fn execute(
+        &self,
+        spec: &NodeSpec,
+        ctx: node::NodeContext
+    ) -> crate::Result<(node::NodeContext, crate::session::protocol::FrameResult)> {
+        let executor = self.executors.get(&spec.kind)
+            .ok_or_else(|| crate::err!("aucun exécuteur enregistré pour la node {:?}", spec.kind))?;
+
+        executor(ctx).await
     }
 
     /// Publie la première version d'un graphe.

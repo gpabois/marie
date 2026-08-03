@@ -1,90 +1,57 @@
 use typed_builder::TypedBuilder;
 
-use crate::{
-    di::{self, Container, Resolve}, 
-    expert::ExpertClient, 
-    model::ModelClient, 
-    rpc::RpcClient, 
-    secret::{KeyEpoch, SecretKey, SecretManager}, 
-    session::client::SessionClient, 
-    state_graph::client::StateGraphClient, 
-    tools::client::ToolClient, 
-    workspace::client::WorkspaceClient
-};
+use crate::{annuary::capabilities::Capabilities, catalog::store::CatalogStore, di::{Container, Resolve}, events::EventRouter, expert::{Expert, Experts}, graph::Graphs, model::Models, node::OwnNodeId, post::PostMessageRouter, secret::{KeyEpoch, SecretKey, SecretManager, store::SecretStore}, session::{controller::SessionController, store::SessionStore}, tools::Tools};
+
+
 
 #[derive(TypedBuilder)]
 pub struct ClientArgs {
     epochs: Vec<(KeyEpoch, SecretKey)>,
-    current_epoch: KeyEpoch
+    current_epoch: KeyEpoch,
 }
+
 
 #[derive(Clone)]
-pub struct Client {
-    network: Network,
-    container: Container
+pub struct LocalInMemoryMarie {
+    container: Container,
+    pub tools: Tools,
+    pub graphs: Graphs,
+    pub models: Models,
+    pub experts: Experts,
+    _session_controller: SessionController
 }
 
-impl Client {
+impl LocalInMemoryMarie {
     pub fn new(args: ClientArgs) -> crate::Result<Self> {
-        let swarm = create_swarm(NodeKind::Client)?;
-        let local_peer_id = *swarm.local_peer_id();
-
-        let network = Actor::create(swarm, NodeKind::Client);
         let secret = SecretManager::with_epochs(args.epochs, args.current_epoch)?;
 
-        let container = di::Container::default();
+        let container = Container::default();
+        container.register(OwnNodeId::local());
         container.register(secret);
-        container.register(LocalPeerId(local_peer_id));
-        container.register(rpc::build_client(&network));
-        container.register(bootstrap::build_client(
-            &network, 
-            BootstrapArgs::builder()
-                .local_peer_id(local_peer_id)
-                .build()
-        ));
+        container.register(SecretStore::in_memory());
+        // Postoffice & EventBus configuration
+        container.register(PostMessageRouter::new_local());
+        container.register(EventRouter::new_local());
+        container.register(CatalogStore::in_memory());
+        container.register(Capabilities::all());
+        container.register(SessionStore::in_memory());
 
-        // Fail fast at runtime if the di is not properly configured.
-        let sessions: SessionClient = container.resolve();
-        let workspaces: WorkspaceClient = container.resolve();
-        let models: ModelClient = container.resolve();
-        let experts: ExpertClient = container.resolve();
-        let tools: ToolClient = container.resolve();
+        let tools: Tools = container.resolve(());
+        let graphs: Graphs = container.resolve(());
+        let models: Models = container.resolve(());
+        let experts: Experts = container.resolve(());
+        
+        let _session_controller: SessionController = container.resolve(());
+        
 
-        Ok(Client { network, container })
+        Ok(Self { 
+            tools,
+            graphs,
+            experts,
+            models,
+            _session_controller,
+            container 
+        })
     }
 
-    #[inline]
-    pub fn sessions(&self) -> SessionClient {
-        self.container.resolve()
-    }
-
-    #[inline]
-    pub fn workspaces(&self) -> WorkspaceClient {
-        self.container.resolve()
-    }
-
-    #[inline]
-    pub fn models(&self) -> ModelClient {
-        self.container.resolve()
-    }
-
-    #[inline]
-    pub fn tools(&self) -> ToolClient {
-        self.container.resolve()
-    }
-
-    pub async fn connect(&self) -> crate::Result<()> {
-        self.network.clone().listen(false).await;
-        Ok(())
-    }
-
-    /// Accès à la couche réseau brute du client — notamment pour construire
-    /// un transport `Layer<Send = NetworkCommand, Received = NetworkEvent>`
-    /// (voir [`Network::transport`]) ou s'abonner directement à des topics
-    /// gossipsub (voir [`Network::subscribe`]), par exemple depuis
-    /// `marie_gateway::MarieGatewayActor::create`. `Network` est `Clone` (de
-    /// simples `Sender`/`Arc` internes), ce clone est donc peu coûteux.
-    pub fn network(&self) -> SwarmNetwork {
-        self.network.clone()
-    }
 }

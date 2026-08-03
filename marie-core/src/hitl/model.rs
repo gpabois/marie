@@ -87,6 +87,9 @@ pub enum Answer {
     Multiple(Vec<String>),
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Answers(HashMap<String, Answer>);
+
 /// Vérifie que `answers` répond à chacune de `questions` avec une valeur du
 /// type attendu (voir [`QuestionKind`]) — helper côté appelant/passerelle
 /// (ex. avant de soumettre à [`crate::session::client::SessionClient::report_user_input`]) :
@@ -94,7 +97,7 @@ pub enum Answer {
 /// doc de `report_user_input`, c'est ce qui permet à un input spontané de
 /// partager la même mutation qu'une réponse structurée sans avoir à
 /// satisfaire un schéma qu'il ne connaît pas).
-pub fn validate_answers(questions: &[Question], answers: &HashMap<String, Answer>) -> Result<(), String> {
+pub fn validate_answers(questions: &[Question], answers: HashMap<String, Answer>) -> Result<Answers, String> {
     for question in questions {
         let Some(answer) = answers.get(&question.key) else {
             return Err(format!("réponse manquante pour '{}'", question.key));
@@ -127,7 +130,7 @@ pub fn validate_answers(questions: &[Question], answers: &HashMap<String, Answer
         }
     }
 
-    Ok(())
+    Ok(Answers(answers.clone()))
 }
 
 #[cfg(test)]
@@ -151,7 +154,7 @@ mod tests {
             ("notify".to_string(), Answer::Multiple(vec!["slack".to_string()])),
         ]);
 
-        assert!(validate_answers(&questions, &answers).is_ok());
+        assert!(validate_answers(&questions, answers).is_ok());
     }
 
     #[test]
@@ -159,7 +162,7 @@ mod tests {
         let questions = sample_questions();
         let answers = HashMap::from([("name".to_string(), Answer::Single("Ada".to_string()))]);
 
-        assert!(validate_answers(&questions, &answers).is_err());
+        assert!(validate_answers(&questions, answers).is_err());
     }
 
     #[test]
@@ -171,7 +174,7 @@ mod tests {
             ("notify".to_string(), Answer::Multiple(vec![])),
         ]);
 
-        assert!(validate_answers(&questions, &answers).is_err());
+        assert!(validate_answers(&questions, answers).is_err());
     }
 
     #[test]
@@ -183,7 +186,7 @@ mod tests {
             ("notify".to_string(), Answer::Multiple(vec![])),
         ]);
 
-        assert!(validate_answers(&questions, &answers).is_err());
+        assert!(validate_answers(&questions, answers).is_err());
     }
 
     fn file_upload_questions(accept: Vec<String>) -> Vec<Question> {
@@ -195,7 +198,7 @@ mod tests {
         let questions = file_upload_questions(vec![".pdf".to_string(), ".png".to_string()]);
         let answers = HashMap::from([("attachment".to_string(), Answer::Single("rapport.PDF".to_string()))]);
 
-        assert!(validate_answers(&questions, &answers).is_ok());
+        assert!(validate_answers(&questions, answers).is_ok());
     }
 
     #[test]
@@ -203,7 +206,7 @@ mod tests {
         let questions = file_upload_questions(vec![".pdf".to_string()]);
         let answers = HashMap::from([("attachment".to_string(), Answer::Single("photo.jpg".to_string()))]);
 
-        assert!(validate_answers(&questions, &answers).is_err());
+        assert!(validate_answers(&questions, answers).is_err());
     }
 
     #[test]
@@ -211,7 +214,7 @@ mod tests {
         let questions = file_upload_questions(vec![]);
         let answers = HashMap::from([("attachment".to_string(), Answer::Single(String::new()))]);
 
-        assert!(validate_answers(&questions, &answers).is_err());
+        assert!(validate_answers(&questions, answers).is_err());
     }
 
     #[test]
@@ -219,6 +222,6 @@ mod tests {
         let questions = file_upload_questions(vec![]);
         let answers = HashMap::from([("attachment".to_string(), Answer::Single("n_importe_quoi.bin".to_string()))]);
 
-        assert!(validate_answers(&questions, &answers).is_ok());
+        assert!(validate_answers(&questions, answers).is_ok());
     }
 }

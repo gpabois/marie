@@ -6,9 +6,9 @@ use libp2p::PeerId;
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use tokio::{select, task::JoinHandle};
+use tokio::{select, sync::watch, task::JoinHandle};
 
-use crate::{di::{Factory, Get}, node::NodeId, post::PostOffice, rpc::{RpcError, protocol::RpcReply}};
+use crate::{di::{Constructible, Get}, node::NodeId, post::PostOffice, rpc::{RpcError, protocol::RpcReply}};
 use super::protocol::{RpcMessage, RpcCall};
 
 pub trait RpcServable {
@@ -24,11 +24,16 @@ pub trait RpcServable {
 #[derive(Clone)]
 pub struct RpcServer {
     postoff: PostOffice,
-    executors: Arc<Mutex<HashMap<String, RpcExecutor>>>
+    executors: Arc<Mutex<HashMap<String, RpcExecutor>>>,
+    /// Signale que [`Self::run`] s'est effectivement abonné au flux du
+    /// `PostOffice` — attendre ce signal (voir [`Self::wait_for`]) avant
+    /// d'émettre un appel évite de le perdre silencieusement (le routeur
+    /// local ne bufferise rien, voir `post::LocalPostMessageRouter`).
+    ready: watch::Receiver<bool>
 }
 
-impl<C> Factory<C> for RpcServer where C: Get<PostOffice> {
-    fn create(container: &C) -> Self {
+impl<C> Constructible<C> for RpcServer where C: Get<PostOffice> {
+    fn construct(container: &C, _: ()) -> Self {
         let postoff: PostOffice = container.get();
         Self::new(postoff)
     }
@@ -36,20 +41,25 @@ impl<C> Factory<C> for RpcServer where C: Get<PostOffice> {
 
 impl RpcServer {
     pub fn new(postoff: PostOffice) -> Self {
+        let (ready_tx, ready_rx) = watch::channel(false);
+
         let server = RpcServer {
             postoff,
-            executors: Arc::new(Mutex::new(HashMap::default()))
+            executors: Arc::new(Mutex::new(HashMap::default())),
+            ready: ready_rx
         };
 
-        tokio::spawn(server.clone().run());
+        tokio::spawn(server.clone().run(ready_tx));
 
         server
     }
 
-    async fn run(self) {
+    async fn run(self, ready: watch::Sender<bool>) {
         use RpcMessage::Call;
 
         let mut rx = self.postoff.stream_messages::<RpcMessage>();
+        let _ = ready.send(true);
+
         loop {
             select! {
                 Some(msg) = rx.next() => {
@@ -60,6 +70,21 @@ impl RpcServer {
                 }
             }
         }
+    }
+
+    /// Attend que la boucle [`Self::run`] se soit effectivement abonnée au
+    /// flux du `PostOffice` — à appeler avant tout appel dans un contexte
+    /// (ex. tests avec `PostOffice::local`) où `run` vient d'être spawnée et
+    /// n'a pas forcément eu la main : un message émis avant cet abonnement
+    /// serait sinon silencieusement perdu.
+    pub async fn wait_for(&self) {
+        let mut ready = self.ready.clone();
+
+        if *ready.borrow() {
+            return;
+        }
+
+        let _ = ready.wait_for(|ready| *ready).await;
     }
 
     fn send(&self, msg: impl Into<RpcMessage>, destination: NodeId) -> Result<(), RpcError> {

@@ -1,10 +1,7 @@
 use std::{any::Any, collections::HashMap, panic::AssertUnwindSafe, sync::Arc};
 
 use crate::{
-    events::EventService, 
-    job::{JobId, JobInstance, JobState}, 
-    node::LocalNodeId, rpc::{RemoteProcedureCall as _, RpcServer}, 
-    worker::{JobAck, WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
+    di::{Constructible, Get, Resolve}, events::EventBus, job::{JobId, JobInstance, JobState}, node::OwnNodeId, rpc::{RemoteProcedureCall as _, RpcServer}, worker::{JobAck, WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
 };
 use futures::{FutureExt, future::BoxFuture};
 use parking_lot::Mutex;
@@ -13,19 +10,33 @@ use typed_builder::TypedBuilder;
 
 #[derive(TypedBuilder)]
 pub struct WorkerArgs {
-    local_node_id: LocalNodeId,
+    local_node_id: OwnNodeId,
     rpc: RpcServer,
-    events: EventService
+    events: EventBus
 }
 
 type JobExecutor = Arc<dyn (Fn(serde_json::Value) -> BoxFuture<'static, Result<serde_json::Value, crate::Error>>) + Send + Sync + 'static>;
 
 #[derive(Clone)]
 pub struct Worker {
-    local_node_id: LocalNodeId,
-    events: EventService,
+    local_node_id: OwnNodeId,
+    events: EventBus,
     executors: Arc<Mutex<HashMap<String, JobExecutor>>>,
     jobs: Arc<Mutex<HashMap<JobId, JobState>>>
+}
+
+impl<C> Constructible<C> for Worker 
+    where C: Get<OwnNodeId> + Resolve<EventBus> + Resolve<RpcServer>
+{
+    fn construct(container: &C, args: ()) -> Self {
+        let args = WorkerArgs::builder()
+            .local_node_id(container.get())
+            .events(container.resolve(()))
+            .rpc(container.resolve(()))
+            .build();
+
+        Self::new(args)
+    }
 }
 
 impl Worker {
@@ -68,7 +79,7 @@ impl Worker {
 
     fn update_state(&self, id: JobId, state: JobState) {
         *self.jobs.lock().entry(id).or_default() = state.clone();
-        self.events.emit_event(WorkerEvent::JobUpdate { id, state });
+        self.events.emit(WorkerEvent::JobUpdate { id, state });
     }
 
     pub(super) fn get_job_state(self, id: &JobId) -> Result<JobState, WorkerError> {

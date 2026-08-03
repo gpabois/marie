@@ -2,44 +2,72 @@ use std::{collections::HashMap, sync::Arc};
 
 use chrono::Utc;
 use futures::StreamExt;
-use libp2p::PeerId;
 use parking_lot::Mutex;
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
-use tokio::{select, sync::oneshot};
+use tokio::{select, sync::{oneshot, watch}};
 use typed_builder::TypedBuilder;
 
 use crate::{
-    di::{Factory, Get}, id::IdGenerator, node::NodeId, post::PostOffice, rpc::{RemoteProcedureCall, RpcError, protocol::RpcId}
+    di::{Constructible, Resolve}, id::IdGenerator, node::NodeId, post::PostOffice, rpc::{RemoteProcedureCall, RpcError, protocol::RpcId}
 };
 
 use super::protocol::*;
 
+#[derive(TypedBuilder)]
+pub struct RpcClientArgs {
+    id: IdGenerator,
+    postoff: PostOffice
+}
+
 #[derive(Clone)]
 pub struct RpcClient {
     postoff: PostOffice,
-    id: Arc<IdGenerator>,
-    tracked: Arc<Mutex<HashMap<RpcId, RpcTracker>>>
+    id: IdGenerator,
+    tracked: Arc<Mutex<HashMap<RpcId, RpcTracker>>>,
+    /// Signale que [`Self::run`] s'est effectivement abonné au flux du
+    /// `PostOffice` — attendre ce signal (voir [`Self::wait_for`]) avant
+    /// d'émettre un appel évite de perdre silencieusement sa réponse (le
+    /// routeur local ne bufferise rien, voir `post::LocalPostMessageRouter`).
+    ready: watch::Receiver<bool>
+}
+
+impl<C> Constructible<C> for RpcClient 
+    where C: Resolve<PostOffice> + Resolve<IdGenerator>
+{
+    fn construct(container: &C, _: ()) -> Self {
+        let args = RpcClientArgs::builder()
+            .postoff(container.resolve(()))
+            .id(container.resolve(()))
+            .build();
+
+        Self::new(args)
+    }
 }
 
 impl RpcClient {
     pub fn new(
-        postoff: PostOffice
+        args: RpcClientArgs
     ) -> Self {
+        let (ready_tx, ready_rx) = watch::channel(false);
+
         let client = RpcClient {
-            postoff, 
-            id: Arc::new(IdGenerator::default()),
-            tracked: Arc::new(Mutex::new(HashMap::default()))
+            postoff: args.postoff,
+            id: args.id,
+            tracked: Arc::new(Mutex::new(HashMap::default())),
+            ready: ready_rx
         };
 
-        tokio::spawn(client.clone().run());
+        tokio::spawn(client.clone().run(ready_tx));
 
         client
     }
 
-    async fn run(self) {
+    async fn run(self, ready: watch::Sender<bool>) {
         use RpcMessage::{Reply, Ack};
         let mut rx = self.postoff.stream_messages::<RpcMessage>();
+        let _ = ready.send(true);
+
         loop {
             select! {
                 Some(msg) = rx.next() => {
@@ -51,6 +79,21 @@ impl RpcClient {
                 }
             }
         }
+    }
+
+    /// Attend que la boucle [`Self::run`] se soit effectivement abonnée au
+    /// flux du `PostOffice` — à appeler avant tout appel dans un contexte
+    /// (ex. tests avec `PostOffice::local`) où `run` vient d'être spawnée et
+    /// n'a pas forcément eu la main : une réponse émise avant cet
+    /// abonnement serait sinon silencieusement perdue.
+    pub async fn wait_for(&self) {
+        let mut ready = self.ready.clone();
+
+        if *ready.borrow() {
+            return;
+        }
+
+        let _ = ready.wait_for(|ready| *ready).await;
     }
 
     fn handle_ack(&self, ack: RpcAck) {
@@ -75,12 +118,6 @@ impl RpcClient {
     }
 }
 
-impl<C> Factory<C> for RpcClient where C: Get<PostOffice> {
-    fn create(container: &C) -> Self {
-        let postoff: PostOffice = container.get();
-        Self::new(postoff)
-    }
-}
 
 #[derive(TypedBuilder)]
 pub struct RpcCallArgs {
@@ -117,7 +154,8 @@ impl RpcClient {
     }
 
     pub async fn call<R: DeserializeOwned>(&self, args: RpcCallArgs) -> Result<R, RpcError> {
-        let id = RpcId(self.id.next_id());
+        let id = self.id.next();
+
         let call = RpcCall {
             id,
             name: args.name,

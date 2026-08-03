@@ -5,8 +5,24 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 use crate::catalog::Catalogable;
+use crate::id::{ID, generate_id};
 use crate::model::ModelId;
 use crate::tools::ToolId;
+
+/// Identifiant d'une demande d'avis d'expert (voir
+/// [`crate::expert::AskExpert`]) — jamais généré par l'appelant (le corps de
+/// node/script à l'origine de la demande, potentiellement rejoué) : voir
+/// [`crate::expert::RequestAskExpert`], le type que celui-ci construit à la
+/// place, dépourvu d'id, transformé en [`crate::expert::AskExpert`] côté
+/// `SessionHandler` une fois l'id généré.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct ExpertAskId(ID);
+
+impl ExpertAskId {
+    pub fn new() -> ExpertAskId {
+        ExpertAskId(generate_id())
+    }
+}
 
 /// Identifiant unique d'un expert dans l'[`ExpertCatalog`](crate::expert::catalog::ExpertCatalog).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]

@@ -36,10 +36,26 @@ impl From<NodeId> for PeerId {
 }
 
 #[derive(Clone, PartialEq, Eq)]
-pub struct LocalNodeId(NodeId);
+pub struct OwnNodeId(NodeId);
 
-impl From<LocalNodeId> for NodeId {
-    fn from(value: LocalNodeId) -> Self {
+impl OwnNodeId {
+    pub fn new(id: NodeId) -> Self {
+        Self(id)
+    }
+
+    pub fn local() -> Self {
+        Self::new(NodeId::default())
+    }
+}
+
+impl AsRef<[u8]> for OwnNodeId {
+    fn as_ref(&self) -> &[u8] {
+        self.0.as_ref()
+    }
+}
+
+impl From<OwnNodeId> for NodeId {
+    fn from(value: OwnNodeId) -> Self {
         value.0
     }
 }

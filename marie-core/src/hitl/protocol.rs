@@ -1,17 +1,17 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
-use crate::{hitl::{Answer, Hitl}, session::frames::FrameId};
+use crate::{hitl::{Hitl, HitlId, model::Answers}, session::SessionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitlRequest {
-    id: FrameId,
-    request: Hitl
+    pub session_id: SessionId,
+    pub id: HitlId,
+    pub hitl: Hitl
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct HitlResponse {
-    id: FrameId,
-    response: HashMap<String, Answer>
+    pub session_id: SessionId,
+    pub id: HitlId,
+    pub answers: Answers
 }

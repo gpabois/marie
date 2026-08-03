@@ -5,34 +5,154 @@ pub(crate) mod rpc;
 use std::{collections::{HashMap, VecDeque}, sync::Arc};
 
 use chrono::{DateTime, Duration, Utc};
-use futures::stream::BoxStream;
+use futures::stream::{BoxStream, StreamExt};
 use libp2p::PeerId;
 use parking_lot::Mutex;
-use tokio::select;
-use tokio_stream::StreamExt;
 
 use crate::{
-    annuary::{capabilities::Capabilities, protocol::AnnuaryEvent, rpc::GetCapabilities}, events::EventService, hrw, network::protocol::NetworkEvent, node::NodeId, rpc::{RemoteProcedureCall, RpcClient, RpcServer, Void}
+    annuary::{capabilities::Capabilities, protocol::AnnuaryEvent, rpc::GetCapabilities}, di::{Constructible, Get, Resolve}, events::Event, hrw, network::{Network, protocol::NetworkEvent}, node::{OwnNodeId, NodeId}, rpc::{RpcClient, Void}
 };
+#[cfg(feature = "rpc-executor")]
+use crate::rpc::{RemoteProcedureCall, RpcServer};
+
+pub trait RouteAnnuaryEvents {
+    /// Identité du nœud local — portée par le router plutôt que passée à
+    /// côté à [`Annuary::new`] : c'est [`NetworkAnnuaryEventRouter`] qui la
+    /// connaît nativement (dérivée du `PeerId` libp2p, voir
+    /// [`crate::network::NetworkStrategy::local_id`]), donc autant en faire
+    /// la source unique plutôt que de risquer une désynchronisation avec un
+    /// paramètre fourni séparément.
+    fn local_node_id(&self) -> OwnNodeId;
+    fn stream_events(&self) -> BoxStream<'static, AnnuaryEvent>;
+}
+
+/// Type opaque enveloppant l'implémentation concrète de [`RouteAnnuaryEvents`]
+/// utilisée par [`Annuary`] — même rôle que [`crate::events::EventRouter`]
+/// vis-à-vis de [`crate::events::RouteEvents`].
+#[derive(Clone)]
+pub struct AnnuaryEventRouter(Arc<dyn RouteAnnuaryEvents + Send + Sync + 'static>);
+
+impl AnnuaryEventRouter {
+    pub fn new(router: impl RouteAnnuaryEvents + Send + Sync + 'static) -> Self {
+        Self(Arc::new(router))
+    }
+}
+
+impl RouteAnnuaryEvents for AnnuaryEventRouter {
+    fn local_node_id(&self) -> OwnNodeId {
+        self.0.local_node_id()
+    }
+
+    fn stream_events(&self) -> BoxStream<'static, AnnuaryEvent> {
+        self.0.stream_events()
+    }
+}
+
+/// Implémentation de [`RouteAnnuaryEvents`] adossée au réseau libp2p — fusionne
+/// deux sources de [`NetworkEvent`] (voir [`crate::network::NetworkStrategy::stream_events`]) :
+/// les connexions/déconnexions de première main (`NodeConnected`/`NodeDisconnected`,
+/// détectées dès l'établissement/la perte de connexion libp2p, sans dépendre
+/// du gossip) et les [`AnnuaryEvent`] gossipés sur [`AnnuaryEvent::TOPIC`]
+/// (`/marie/annuary`) pour la propagation multi-sauts (un pair appris par un
+/// tiers, jamais connecté directement). Contrairement à
+/// [`crate::events::NetworkEventRouter`]/[`crate::post::NetworkPostMessageRouter`],
+/// pas de [`crate::events::LocalEventRouter`] embarqué ici pour le
+/// self-delivery : `RouteAnnuaryEvents` ne permet pas d'émettre (un nœud ne
+/// "se connecte" jamais à lui-même), donc rien à se relivrer.
+#[derive(Clone)]
+pub struct NetworkAnnuaryEventRouter {
+    network: Network,
+    local_node_id: OwnNodeId,
+}
+
+impl NetworkAnnuaryEventRouter {
+    pub fn new(network: Network) -> Self {
+        network.subscribe(AnnuaryEvent::TOPIC);
+        let local_node_id = OwnNodeId::new(NodeId::from(PeerId::from(network.local_id())));
+        Self { network, local_node_id }
+    }
+}
+
+impl RouteAnnuaryEvents for NetworkAnnuaryEventRouter {
+    fn local_node_id(&self) -> OwnNodeId {
+        self.local_node_id.clone()
+    }
+
+    fn stream_events(&self) -> BoxStream<'static, AnnuaryEvent> {
+        self.network
+            .stream_events()
+            .filter_map(|event| {
+                let matched = match event {
+                    NetworkEvent::NodeConnected { node_id } => Some(AnnuaryEvent::NodeConnected(node_id)),
+                    NetworkEvent::NodeDisconnected { node_id } => Some(AnnuaryEvent::NodeDisconnected(node_id)),
+                    NetworkEvent::EventReceived { topic, data, .. } if topic == AnnuaryEvent::TOPIC => {
+                        serde_json::from_slice(&data).ok()
+                    }
+                    _ => None,
+                };
+                std::future::ready(matched)
+            })
+            .boxed()
+    }
+}
+
+/// Implémentation de [`RouteAnnuaryEvents`] purement locale (un seul
+/// processus, pas de réseau) — contrairement à [`crate::events::LocalEventRouter`]
+/// ou [`crate::post::LocalPostMessageRouter`], il n'y a ici rien à relayer :
+/// [`AnnuaryEvent`] ne décrit que des connexions/déconnexions *réseau* vers
+/// d'autres pairs (voir [`NetworkAnnuaryEventRouter`]), un concept qui n'existe
+/// pas hors réseau — un nœud local sans [`Network`] n'observera donc jamais
+/// aucun pair. Sert de contrepartie triviale pour les tests/nœuds qui
+/// n'exposent pas de [`Network`] ; sans réseau pour la dériver, l'identité du
+/// nœud local doit être fournie explicitement à la construction.
+#[derive(Clone)]
+pub struct LocalAnnuaryEventRouter {
+    local_node_id: OwnNodeId,
+}
+
+impl LocalAnnuaryEventRouter {
+    pub fn new(local_node_id: OwnNodeId) -> Self {
+        Self { local_node_id }
+    }
+}
+
+impl RouteAnnuaryEvents for LocalAnnuaryEventRouter {
+    fn local_node_id(&self) -> OwnNodeId {
+        self.local_node_id.clone()
+    }
+
+    fn stream_events(&self) -> BoxStream<'static, AnnuaryEvent> {
+        futures::stream::pending().boxed()
+    }
+}
 
 #[derive(Clone)]
 pub struct Annuary {
     rpc_client: RpcClient,
-    events: EventService,
     capabilities: Arc<Capabilities>,
+    local_node_id: OwnNodeId,
     peers: Arc<Mutex<HashMap<NodeId, PeerTracker>>>,
 }
 
+
 impl Annuary {
+    /// Les `n` pairs portant `capabilities`, classés par hachage cohérent
+    /// (Rendezvous/HRW, voir [`crate::hrw`]) par rapport à `id` — le nœud
+    /// local est inclus dans le pool candidat s'il porte lui-même
+    /// `capabilities`, au même titre que n'importe quel pair connu.
     pub fn pick_top_n(&self, id: impl AsRef<[u8]>, capabilities: impl Into<Capabilities>, n: usize) -> VecDeque<NodeId> {
         let capabilities: Capabilities = capabilities.into();
-        let peers: Vec<NodeId> = self.peers.lock()
+        let mut candidates: Vec<NodeId> = self.peers.lock()
             .iter()
-            .filter(|(id, tracker)| tracker.capabilities.includes(capabilities))
+            .filter(|(_, tracker)| tracker.capabilities.includes(capabilities))
             .map(|(id, _)| id.clone())
             .collect();
 
-        hrw::pick_top_n(id.as_ref(), &peers, n).into_iter().cloned().collect()
+        if self.capabilities.includes(capabilities) {
+            candidates.push(self.local_node_id.clone().into());
+        }
+
+        hrw::pick_top_n(id.as_ref(), &candidates, n).into_iter().cloned().collect()
     }
 
     /// Tous les pairs actuellement connus portant `capabilities` (là où
@@ -40,54 +160,85 @@ impl Annuary {
     /// hachage cohérent) — utilisé pour calculer une composition de groupe
     /// complète, ex. les votants d'un groupe Raft (voir
     /// `lease::server::build_lease_authority`), pas juste "un pair pour X".
+    /// Comme [`Self::pick_top_n`], inclut le nœud local s'il porte lui-même
+    /// `capabilities`.
     pub fn nodes_with(&self, capabilities: impl Into<Capabilities>) -> Vec<NodeId> {
         let capabilities = capabilities.into();
-        self.peers.lock()
+        let mut nodes: Vec<NodeId> = self.peers.lock()
             .iter()
             .filter(|(_, tracker)| tracker.capabilities.includes(capabilities))
             .map(|(peer_id, _)| peer_id.clone())
-            .collect()
+            .collect();
+
+        if self.capabilities.includes(capabilities) {
+            nodes.push(self.local_node_id.clone().into());
+        }
+
+        nodes
     }
 }
 
+impl<C> Constructible<C> for Annuary
+     where C: Get<Capabilities> 
+                + Get<AnnuaryEventRouter>
+                + Resolve<RpcClient>
+                + Resolve<RpcServer>
+
+{
+    fn construct(container: &C, _: ()) -> Self {
+        Self::new(
+            container.get(), 
+            container.get(),
+            container.resolve(()),
+            container.resolve(())
+        )
+    }
+}
+
+
 impl Annuary {
-    /// `network_events` : flux brut des évènements réseau locaux (voir
-    /// `NetworkStrategy::stream_events`), utilisé pour
-    /// `NetworkEvent::PeerConnected`/`PeerDisconnected` — c'est la *seule*
-    /// source qui fonctionne dès la première connexion directe à un pair.
-    /// Le topic gossip `/marie/annuary` (`AnnuaryEvent`) reste écouté en plus
-    /// pour la propagation multi-sauts (un pair appris par un tiers, jamais
-    /// connecté directement), mais rien ne l'émet encore aujourd'hui.
+    #[cfg(feature = "rpc-executor")]
     pub fn new(
         capabilities: Capabilities,
-        events: EventService,
+        router: AnnuaryEventRouter,
         rpc_client: RpcClient,
         mut rpc_server: RpcServer,
-        network_events: BoxStream<'static, NetworkEvent>,
     ) -> Self {
         let annuary = Annuary {
             rpc_client,
-            events,
             capabilities: Arc::new(capabilities),
+            local_node_id: router.local_node_id(),
             peers: Arc::new(Mutex::new(HashMap::new()))
         };
 
-        tokio::spawn(annuary.clone().run(network_events));
+        tokio::spawn(annuary.clone().run(router.stream_events()));
 
         GetCapabilities::new(annuary.clone()).register(&mut rpc_server);
 
         annuary
     }
 
-    async fn run(self, mut network_events: BoxStream<'static, NetworkEvent>) {
-        self.events.subscribe("/marie/annuary");
-        let mut rx = self.events.stream_events("/marie/annuary");
+    #[cfg(not(feature = "rpc-executor"))]
+    pub fn new(
+        capabilities: Capabilities,
+        router: AnnuaryEventRouter,
+        rpc_client: RpcClient,
+    ) -> Self {
+        let annuary = Annuary {
+            rpc_client,
+            capabilities: Arc::new(capabilities),
+            local_node_id: router.local_node_id(),
+            peers: Arc::new(Mutex::new(HashMap::new()))
+        };
 
-        loop {
-            select! {
-                Some(event) = rx.next() => self.handle_event(event),
-                Some(event) = network_events.next() => self.handle_network_event(event),
-            }
+        tokio::spawn(annuary.clone().run(router.stream_events()));
+
+        annuary
+    }
+
+    async fn run(self, mut events: BoxStream<'static, AnnuaryEvent>) {
+        while let Some(event) = events.next().await {
+            self.handle_event(event);
         }
     }
 
@@ -95,14 +246,6 @@ impl Annuary {
         match event {
             AnnuaryEvent::NodeConnected(node_id) => self.on_node_connected(node_id),
             AnnuaryEvent::NodeDisconnected(node_id) => self.on_node_disconnected(node_id),
-        }
-    }
-
-    fn handle_network_event(&self, event: NetworkEvent) {
-        match event {
-            NetworkEvent::NodeConnected { node_id } => self.on_node_connected(node_id),
-            NetworkEvent::NodeDisconnected { node_id } => self.on_node_disconnected(node_id),
-            _ => {}
         }
     }
 
@@ -117,10 +260,10 @@ impl Annuary {
 
     async fn handle_peer_connection(self, node_id: NodeId) -> crate::Result<()> {
         let capabilities = self.rpc_client.invoke::<GetCapabilities>(
-            Void, 
+            Void,
             [node_id.clone()]
         ).await?;
-        
+
         self.peers.lock().entry(node_id).or_insert_with(|| PeerTracker {
             peer_status: PeerStatus::Alive,
             capabilities,

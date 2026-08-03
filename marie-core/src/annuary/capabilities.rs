@@ -1,7 +1,3 @@
-use std::{collections::HashSet, sync::Arc};
-
-use marie_macros::core_rpc;
-use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
 
 #[repr(u8)]
@@ -34,6 +30,10 @@ impl From<Capability> for Capabilities {
 }
 
 impl Capabilities {
+    pub fn all() -> Self {
+        Self(u8::MAX)
+    }
+
     pub fn includes(&self, capabilites: Capabilities) -> bool {
         self.0 & capabilites.0 == capabilites.0
     }

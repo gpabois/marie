@@ -1,3 +1,4 @@
+
 pub mod frames;
 pub mod logs;
 pub mod controller;
@@ -8,5 +9,11 @@ pub mod worker;
 pub mod snapshot;
 pub mod channel;
 pub mod spec;
+pub mod run_log;
+mod hitls;
+pub mod rpc;
+mod client;
+pub mod dto;
+pub mod checkpointer;
 
 pub use model::{SessionId, Session, SessionStatus};

@@ -1,10 +1,12 @@
-use crate::{err, bail};
+use crate::{bail, di::{Constructible, Get}, err, node::{NodeId, OwnNodeId}};
 use bytemuck::{Pod, Zeroable};
+use chrono::Utc;
 use rand_xoshiro::{
     Xoshiro256PlusPlus,
     rand_core::{Rng as _, SeedableRng as _},
 };
 use schemars::JsonSchema;
+use sha2::{Digest, Sha256};
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
@@ -76,7 +78,35 @@ impl FromStr for ID {
     }
 }
 
+impl<C> Constructible<C, chrono::DateTime<Utc>> for IdGenerator 
+    where C: Get<OwnNodeId>
+{
+    fn construct(container: &C, args: chrono::DateTime<Utc>) -> Self {
+        let mut hasher = Sha256::new();
+        let own: OwnNodeId = container.get();
+        hasher.update(own.as_ref());
+        hasher.update(Utc::now().timestamp_micros().to_le_bytes());
+        let seed: [u8; 32] = hasher.finalize().into();
+        IdGenerator::new_from_seed(seed)
+    }
+}
+
+impl IdGenerator {
+    pub fn new_from_seed(seed: [u8; 32]) -> Self {
+        let mut master_rng = Xoshiro256PlusPlus::from_seed(seed);
+        // 3. On extrait un préfixe unique pour cette session
+        let session_prefix = master_rng.next_u64();
+
+        Self {
+            rng: Arc::new(Mutex::new(master_rng)),
+            session_prefix,
+        }
+    }
+
+}
+
 impl Default for IdGenerator {
+
     /// Initialise le générateur avec une seed unique par session (via getrandom)
     fn default() -> Self {
         // 1. On génère une seed aléatoire sécurisée pour cette session
@@ -113,6 +143,10 @@ impl IdGenerator {
         let mut rng = self.rng.lock().unwrap();
         let local_id = rng.next_u64();
         ID(self.session_prefix, local_id)
+    }
+
+    pub fn next<T>(&self) -> T where T: From<ID> {
+        T::from(self.next_id())
     }
 }
 

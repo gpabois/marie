@@ -4,7 +4,7 @@ use sqlx::postgres::{PgPool, PgPoolOptions};
 /// Applique les migrations SQL versionnées embarquées à la compilation
 /// depuis `marie-core/migrations/` (voir [`sqlx::migrate!`]) : une table par
 /// objet du domaine persisté via un trait CRUD spécifique (`session` — voir
-/// `session::store::SessionStore` — pour l'instant), suivies dans une table
+/// `session::store::StoreSession` — pour l'instant), suivies dans une table
 /// `_sqlx_migrations` gérée par `sqlx` : idempotent, sûr à rappeler à chaque
 /// démarrage d'un nœud plutôt qu'une fois pour tout le cluster.
 ///

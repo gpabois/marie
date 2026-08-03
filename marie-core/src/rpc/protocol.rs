@@ -7,6 +7,12 @@ use crate::{id::ID, post::Message, rpc::RpcError};
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct RpcId(pub(super) ID);
 
+impl From<ID> for RpcId {
+    fn from(value: ID) -> Self {
+        Self(value)
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 pub enum RpcMessage {
     Call(RpcCall),

@@ -4,21 +4,22 @@ use async_stream::stream;
 use chrono::{Duration, Utc};
 use futures::{Stream, StreamExt};
 use parking_lot::Mutex;
-use serde::{Deserialize, de::DeserializeOwned};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 use tokio::{select, sync};
 use tokio_stream::wrappers::WatchStream;
 use typed_builder::TypedBuilder;
 
 use crate::{
-    annuary::{Annuary, capabilities::Capability}, events::EventService, node::NodeId, id, job::{Job, JobId, JobInstance, JobState}, rpc::RpcClient, stream::{DynamicStreamPool, StreamHandle}, worker::{ WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
+    annuary::{Annuary, capabilities::Capability}, di::{Constructible, Resolve}, events::EventBus, id::{self, IdGenerator}, job::{Job, JobId, JobInstance, JobState}, node::NodeId, rpc::RpcClient, stream::{DynamicStreamPool, StreamHandle}, worker::{ WorkerError, WorkerEvent, rpc::{GetJobState, ScheduleJob}}
 };
 
 
 #[derive(TypedBuilder)]
 pub struct WorkerClientArgs {
     rpc: RpcClient,
-    events: EventService,
+    id: IdGenerator,
+    events: EventBus,
     annuary: Annuary
 }
 
@@ -32,10 +33,29 @@ enum TimerEvent {
 #[derive(Clone)]
 pub struct WorkerClient {
     rpc: RpcClient,
-    events: EventService,
+    id: IdGenerator,
+    events: EventBus,
     annuary: Annuary,
     trackers: Arc<Mutex<HashMap<JobId, JobInfo>>>,
     jobs_timers: StreamHandle<TimerEvent>,
+}
+
+impl<C> Constructible<C> for WorkerClient 
+    where C: Resolve<RpcClient> 
+        + Resolve<EventBus> 
+        + Resolve<Annuary>
+        + Resolve<IdGenerator>
+{
+    fn construct(container: &C, args: ()) -> Self {
+        let args = WorkerClientArgs::builder()
+            .rpc(container.resolve(()))
+            .annuary(container.resolve(()))
+            .events(container.resolve(()))
+            .id(container.resolve(()))
+            .build();
+
+        Self::new(args)
+    }
 }
 
 impl WorkerClient {
@@ -46,6 +66,7 @@ impl WorkerClient {
             rpc: args.rpc,
             annuary: args.annuary,
             events: args.events,
+            id: args.id,
             trackers: Arc::new(Mutex::new(HashMap::default())),
             jobs_timers
         };
@@ -60,7 +81,7 @@ impl WorkerClient {
     /// la seule source de vérité du nom envoyé au worker, sans risque de
     /// diverger d'une constante dupliquée côté appelant.
     pub async fn spawn<J: Job>(&self, args: impl Into<J::Args>, ttl: Option<std::time::Duration>) -> Result<JobHandle<J::Return>, WorkerError> {
-        let id = id::generate_id();
+        let id = self.id.next();
 
         let instance = JobInstance {
             id,
@@ -77,12 +98,12 @@ impl WorkerClient {
 
 
     async fn run(self, mut timers: DynamicStreamPool<TimerEvent>) {
-        let mut rx = self.events.stream_events("/marie/workers/events");
+        let mut rx = self.events.stream_events::<WorkerEvent>("/marie/workers/events");
 
         loop {
             select! {
                 Some(event) = rx.next() => {
-                    match event {
+                    match event.payload {
                         WorkerEvent::JobUpdate {id, state} => {
                             self.handle_job_state(id, state);
                         }

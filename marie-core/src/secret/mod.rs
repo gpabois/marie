@@ -1,4 +1,5 @@
 pub mod store;
+pub mod in_memory;
 pub mod vault;
 
 use std::{collections::BTreeMap, sync::{Arc, Mutex}};

@@ -5,9 +5,10 @@ use async_openai::{
 use futures::{Stream, StreamExt as _};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
+use typed_builder::TypedBuilder;
 
 use crate::{
-    agent::{AgentFrameId, Context}, catalog::{Catalog, CatalogError, CatalogItemRef}, model::model::Model, secret::vault::{Vault, VaultError}, tools::{RequestToolCall, ToolCall, ToolCallId, ToolDefinition as MarieTool}
+    agent::Context, catalog::{Catalog, CatalogError, CatalogItemRef}, di::{Constructible, Resolve}, model::model::Model, secret::vault::{Vault, VaultError}, tools::{RequestToolCall, Tool as MarieTool, ToolCall}
 };
 
 pub mod model;
@@ -30,6 +31,18 @@ pub enum ModelError {
 pub struct Models {
     vault: Vault,
     catalog: Catalog
+}
+
+impl<C> Constructible<C> for Models where C: Resolve<Catalog> + Resolve<Vault> {
+    fn construct(container: &C, _: ()) -> Self {
+        Self::new(container.resolve(()), container.resolve(()))
+    }
+}
+
+impl Models {
+    pub fn new(vault: Vault, catalog: Catalog) -> Self {
+        Self { vault, catalog }
+    }
 }
 
 pub enum CreateModel {
@@ -59,9 +72,11 @@ pub enum ModelChange {
 #[derive(Clone)]
 pub struct ModelRef(CatalogItemRef);
 
+#[derive(TypedBuilder)]
 pub struct ExecuteModelArgs {
     model: ModelId,
     context: Context,
+    #[builder(default)]
     tools: Vec<MarieTool>
 }
 
@@ -268,7 +283,6 @@ pub async fn execute(model: Model, tools: Vec<MarieTool>, input: impl ToString) 
                 let text = response.output_text();
                 let tool_calls = response.output.into_iter().filter_map(|item| match item {
                     OutputItem::FunctionCall(call) => Some(RequestToolCall {
-                        id: ToolCallId::new(crate::id::generate_id()),
                         name: call.name,
                         parameters: serde_json::from_str(&call.arguments).unwrap_or_default(),
                     }),

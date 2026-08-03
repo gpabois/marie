@@ -1,6 +1,7 @@
 use std::{fmt, str::FromStr};
 
 use bytemuck::{Pod, Zeroable};
+use chrono::Utc;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
@@ -59,20 +60,34 @@ impl AsRef<[u8]> for SessionId {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Session {
     pub id: SessionId,
+    /// The root frame
     pub root_frame: Option<FrameId>,
     /// Statut de haut niveau de la session — indépendant de
     /// [`crate::session::frames::FrameStatus`], qui suit l'état d'un frame
     /// individuel de son arbre, pas la session dans son ensemble.
     pub status: SessionStatus,
     /// Horodatage géré par le store (voir
-    /// `session::store::SessionStore::insert`), pas par l'appelant : toute
-    /// valeur posée ici avant un `insert` est ignorée, écrasée par l'heure
-    /// serveur au moment de l'écriture.
+    /// `session::store::StoreSession::upsert_session`), pas par l'appelant :
+    /// toute valeur posée ici avant un `upsert_session` est ignorée, écrasée
+    /// par l'heure serveur au moment de l'écriture.
     pub created_at: chrono::DateTime<chrono::Utc>,
     /// Comme [`Self::created_at`], géré par le store — mis à jour à chaque
-    /// `insert`/`replace` (voir `session::store::SessionStore::replace`),
-    /// contrairement à `created_at` qu'un `replace` laisse intact.
+    /// `upsert_session` (voir `session::store::StoreSession::upsert_session`),
+    /// contrairement à `created_at` qu'un `upsert_session` sur une session
+    /// existante laisse intact.
     pub last_updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Session {
+    pub fn new(id: SessionId) -> Self {
+        Self {
+            id,
+            root_frame: None,
+            status: SessionStatus::Pending,
+            created_at: Utc::now(),
+            last_updated_at: Utc::now()
+        }
+    }
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]

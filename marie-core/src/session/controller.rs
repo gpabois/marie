@@ -1,50 +1,105 @@
-use std::{collections::HashMap, sync::Arc};
-use futures::{StreamExt, TryFutureExt, stream};
+use std::sync::Arc;
+use futures::TryFutureExt ;
 use moka::future::{Cache, CacheBuilder};
-use parking_lot::Mutex;
-use serde_json::Value;
+use std::collections::HashMap;
 use thiserror::Error;
 use tokio::{select, sync::mpsc};
+use tokio_stream::StreamExt;
+use typed_builder::TypedBuilder;
 
 use crate::{
-    events::EventService, 
-    graph::{GraphId, GraphRef, Graphs, NodeId}, 
-    job::JobState, 
-    session::{channel::{ChannelName, ChannelUpdate}, 
-    controller::Message::FrameCreated, 
-    frames::{FrameData, FrameId, FramePolicy, FrameSpecRef, FrameStatus, FrameTree, NewFrameNodeArgs, ParentPolicy}, 
-    protocol::FrameResponse, snapshot::{Snapshot, SnapshotRef, Snapshots}, 
-    store::SessionStore, worker::{RunFrame, RunFrameArgs}}, 
-    store::PgStore, 
-    worker::WorkerClient
+    catalog::CatalogError, di::{Constructible, Get, Resolve}, events::EventBus, expert::{ExpertAskId, RequestAskExpert}, graph::{GraphId, GraphRef, Graphs, NodeId}, hitl::{Answer, HitlFrame, HitlId, HitlRequest, model::Answers, protocol::HitlResponse, service::HitlError}, id::generate_id, job::JobState, rpc::{RemoteProcedureCall as _, RpcServer}, session::{channel::{ChannelName, ChannelUpdate, Reducer}, checkpointer::{SessionCheckpointer, SessionCheckpointerFactory}, frames::{FrameData, FrameId, FramePolicy, FrameSpecRef::{self, Hitl}, FrameStatus, FrameTree, NewFrameNodeArgs, ParentPolicy}, hitls::Hitls, logs::SessionsLogs, protocol::{Branch, CreateSessionArgs, FrameResponse, SessionCheckpointEvent, SessionEvent}, rpc, run_log::RunLogContent, snapshot::{SessionSnapshots, Snapshot, SnapshotRef}, store::SessionStore, worker::{RunFrame, RunFrameArgs}}, tools::{RequestToolCall, ToolCallId}, worker::{WorkerClient, WorkerError}
 };
 
-use super::{Session, SessionId};
+use super::{Session, SessionId, SessionStatus};
 
+/// Erreur qu'un gestionnaire `on_*` de [`SessionHandler`] peut renvoyer —
+/// point de sortie unique qui déclenche [`SessionHandler::fail`] (voir les
+/// délégateurs `on_*` de [`SessionController`]) : quelle que soit la
+/// variante, la session en cours bascule en [`SessionStatus::Failed`] avec
+/// ce message, et le [`Message`] en cours de traitement est simplement
+/// abandonné (pas de retry automatique).
 #[derive(Debug, Error)]
 pub enum SessionError {
+    /// Échec d'une opération de [`StoreSession`] (chargement/écriture d'une
+    /// session, d'un frame ou d'un cliché). Pas de `#[from]` : [`crate::Error`]
+    /// n'implémente volontairement pas `std::error::Error` (voir sa doc),
+    /// donc `thiserror` ne peut pas en dériver `source()` automatiquement —
+    /// conversion manuelle via `.map_err(SessionError::StorageError)`, même
+    /// idiome que `CatalogError::StoreError`. `Arc` plutôt que `crate::Error`
+    /// nu : cette variante traverse aussi les erreurs d'initialisation de
+    /// `moka::future::Cache::try_get_with` (voir [`SessionController::get`]/
+    /// [`FrameTree::try_get`]/[`Snapshots::try_get`]), qui enveloppe
+    /// l'erreur du futur d'init dans un `Arc` pour pouvoir la partager entre
+    /// tous les appelants concurrents en attente de la même clé.
     #[error("erreur lors des opérations de stockage: {0}")]
-    StorageError(#[from] Arc<sqlx::Error>),
+    StorageError(Arc<crate::Error>),
+    /// Le superstep relu au moment du CAS (voir
+    /// [`SessionHandler::commit_snapshot`]) ne correspond plus à celui
+    /// attendu par l'appelant : un autre `commit_snapshot` a pris de
+    /// vitesse celui-ci sur le même frame.
     #[error("superstep périmé: attendu {expected}, trouvé {got}")]
     StaleSuperstep {
         expected: u32,
         got: u32
-    }
+    },
+    /// Échec du catalogue de graphes ([`Graphs::latest`]/[`Graphs::get`]) —
+    /// typiquement une erreur de stockage ou de désérialisation, pas une
+    /// simple absence (voir [`Self::GraphNotFound`] pour ce cas).
+    #[error("erreur de catalogue: {0}")]
+    CatalogError(#[from] CatalogError),
+    /// [`Graphs::latest`] n'a trouvé aucune version active pour ce
+    /// [`GraphId`] — distinct de [`Self::CatalogError`] : ici le catalogue a
+    /// répondu normalement, il n'y a simplement rien publié sous cet id.
+    #[error("graphe introuvable: {0}")]
+    GraphNotFound(GraphId),
+    /// Le worker n'a pas pu prendre en charge le run (voir
+    /// [`SessionHandler::run_frame`]/[`WorkerClient::spawn`]) — aucun
+    /// travailleur disponible, timeout de programmation, etc.
+    #[error("erreur du worker: {0}")]
+    WorkerError(#[from] WorkerError),
+    /// Échec d'une opération sur les requêtes human-in-the-loop (voir
+    /// [`SessionHandler::append_hitl`]) — contrairement à
+    /// [`Self::StorageError`], `#[from]` s'applique ici : [`HitlError`] est
+    /// une erreur `thiserror` à part entière (elle implémente
+    /// `std::error::Error`), pas [`crate::Error`] nu.
+    #[error("erreur hitl: {0}")]
+    HitlError(#[from] HitlError),
 }
+
+#[derive(TypedBuilder)]
 pub struct SessionControllerArgs {
-    store: PgStore,
-    graphs: Graphs,
-    events: EventService,
-    worker: WorkerClient
+    store: SessionStore,
+    events: EventBus,
+    session_ckp_factory: SessionCheckpointerFactory,
+    rpc: RpcServer,
 }
 
 #[derive(Clone)]
 pub struct SessionController {
-    store: PgStore,
-    worker: WorkerClient,
-    graphs: Graphs,
-    sessions: Cache<SessionId, Arc<SessionHandler>>,
-    queue: mpsc::UnboundedSender<Message>
+    store: SessionStore,
+    events: EventBus,
+    session_ckp_factory: SessionCheckpointerFactory,
+    sessions: Cache<SessionId, Arc<SessionCheckpointer>>,
+    queue: mpsc::UnboundedSender<SessionCheckpointEvent>
+}
+
+impl<C> Constructible<C> for SessionController 
+    where C: Get<SessionStore> 
+            + Resolve<EventBus>
+            + Resolve<RpcServer>
+            + Resolve<SessionCheckpointerFactory>
+{
+    fn construct(container: &C, _: ()) -> Self {
+        let args = SessionControllerArgs::builder()
+            .store(container.get())
+            .session_ckp_factory(container.resolve(()))
+            .rpc(container.resolve(()))
+            .events(container.resolve(()))
+            .build();
+
+        Self::new(args)
+    }
 }
 
 impl SessionController {
@@ -52,7 +107,7 @@ impl SessionController {
     /// de traitement (voir [`Self::run`]) sur une tâche tokio détachée —
     /// l'appelant ne récupère jamais l'exemplaire qui a servi à spawner,
     /// seulement des clones bon marché : les champs de `SessionController`
-    /// sont eux-mêmes des poignées partagées (`PgStore`, `WorkerClient`,
+    /// sont eux-mêmes des poignées partagées (`SessionStore`, `WorkerClient`,
     /// `Cache`, `mpsc::UnboundedSender`), donc `new` et tous ses `clone()`
     /// parlent à la même boucle et à la même queue de messages. C'est aussi
     /// ici qu'est branché l'`eviction_listener` du cache de sessions : une
@@ -63,7 +118,7 @@ impl SessionController {
     ///
     /// ```ignore
     /// let controller = SessionController::new(SessionControllerArgs {
-    ///     store: PgStore::connect("postgres://...").await?,
+    ///     store: SessionStore::new(Arc::new(PgStore::connect("postgres://...").await?)),
     ///     events: EventService::new(/* ... */),
     ///     worker: WorkerClient::new(/* ... */),
     /// });
@@ -72,7 +127,7 @@ impl SessionController {
     /// // même boucle de traitement démarrée par cet appel à `new`.
     /// let handle = controller.clone();
     /// ```
-    pub fn new(args: SessionControllerArgs) -> Self {
+    pub fn new(mut args: SessionControllerArgs) -> Self {
         let (queue_tx, queue_rx) = mpsc::unbounded_channel();
 
         let sessions = CacheBuilder::new(300)
@@ -80,15 +135,31 @@ impl SessionController {
 
         let controller = Self {
             store: args.store,
-            worker: args.worker,
             sessions,
-            graphs: args.graphs,
+            session_ckp_factory: args.session_ckp_factory,
+            events: args.events,
             queue: queue_tx,
         };
+
+        rpc::CreateSession::new(controller.clone()).register(&mut args.rpc);
 
         tokio::spawn(controller.clone().run(queue_rx));
 
         controller
+    }
+
+    pub async fn create_session(&self, args: CreateSessionArgs) -> Result<SessionId, SessionError> {
+        let session_id = SessionId::new(generate_id());
+        let session = Session::new(session_id);
+        
+
+
+        match args {
+            CreateSessionArgs::Shell(shell_mode) => {
+                
+            },
+            CreateSessionArgs::Graph { graph_id, initial } => todo!(),
+        }
     }
 
     /// Boucle de traitement principale, spawnée une seule fois par
@@ -108,11 +179,22 @@ impl SessionController {
     /// // canal) sera consommé par cette boucle et traité par
     /// // `process_message`.
     /// ```
-    async fn run(mut self, mut queue: mpsc::UnboundedReceiver<Message>) {
+    async fn run(mut self, mut queue: mpsc::UnboundedReceiver<SessionCheckpointEvent>) {
+        let mut sessions_events_stream = self.events.stream_events::<SessionEvent>(SessionEvent::TOPIC);
         loop {
             select! {
-                Some(msg) = queue.recv() => self.process_message(msg).await
+                Some(event) = sessions_events_stream.next() 
+                    => self.process_session_event(event.payload).await,
+                Some(msg) = queue.recv() 
+                    => self.process_checkpoint_event(msg).await
             }
+        }
+    }
+
+    async fn process_session_event(&self, event: SessionEvent) {
+        match event {
+            SessionEvent::HitlAnswered(HitlResponse { session_id, id, answers }) 
+                => self.on_hitl_response(session_id, hitl_id, answers),
         }
     }
 
@@ -136,8 +218,8 @@ impl SessionController {
     /// // appelé directement par du code hors de ce module.
     /// self.process_message(Message::FrameTerminated { session_id, frame_id }).await;
     /// ```
-    async fn process_message(&mut self, msg: Message) {
-        use Message::{ChildFrameTerminated, FrameTerminated, FrameReady, FrameRunJobStateUpdate, FrameRunTerminated};
+    async fn process_checkpoint_event(&mut self, msg: SessionCheckpointEvent) {
+        use SessionCheckpointEvent::{FrameCreated, ChildFrameTerminated, FrameTerminated, FrameReady, FrameRunJobStateUpdate, FrameRunTerminated};
 
         match msg {
             FrameCreated { session_id, frame_id } 
@@ -155,13 +237,23 @@ impl SessionController {
                 => self.on_frame_run_update(session_id, frame_id, job_state).await,
             FrameRunTerminated { session_id, frame_id } 
                 => self.on_frame_terminated(session_id, frame_id).await,
-            ChildFrameTerminated { session_id, parent_id, child_id } => todo!(),
+            ChildFrameTerminated { session_id, parent_id, child_id } 
+                => self.on_child_frame_terminated(session_id, parent_id, child_id).await
         }
+    }
+
+    async fn on_hitl_response(&self, session_id: SessionId, hitl_id: HitlId, answers: Answers) {
+        let Ok(handler) = self.get(&session_id).await else { return };
+        if let Err(err) = handler.on_hitl_response(&hitl_id, answers).await {
+            handler.fail(err).await;
+        }       
     }
 
     async fn on_child_frame_terminated(&self, session_id: SessionId, parent_id: FrameId, child_id: FrameId) {
         let Ok(handler) = self.get(&session_id).await else { return };
-        handler.on_child_frame_terminated(&parent_id, &child_id).await
+        if let Err(err) = handler.on_child_frame_terminated(&parent_id, &child_id).await {
+            handler.fail(err).await;
+        }
     }
 
     /// Réagit à [`Message::FrameCreated`] : un frame tout juste créé (voir
@@ -176,7 +268,9 @@ impl SessionController {
     /// ```
     async fn on_frame_created(&self, session_id: SessionId, frame_id: FrameId) {
         let Ok(handler) = self.get(&session_id).await else { return };
-        handler.on_frame_created(&frame_id).await
+        if let Err(err) = handler.on_frame_created(&frame_id).await {
+            handler.fail(err).await;
+        }
     }
 
     /// Réagit à [`Message::FrameRunTerminated`] : relit le statut que
@@ -193,7 +287,9 @@ impl SessionController {
     /// ```
     async fn on_frame_run_terminated(&self, session_id: SessionId, frame_id: FrameId) {
         let Ok(session) = self.get(&session_id).await else { return };
-        session.on_frame_run_terminated(&frame_id).await
+        if let Err(err) = session.on_frame_run_terminated(&frame_id).await {
+            session.fail(err).await;
+        }
     }
 
     /// Réagit à [`Message::FrameRunJobStateUpdate`] : traduit le
@@ -211,7 +307,9 @@ impl SessionController {
     /// ```
     async fn on_frame_run_update(&self, session_id: SessionId, frame_id: FrameId, job_state: JobState<FrameResponse>) {
         let Ok(session) = self.get(&session_id).await else { return };
-        session.on_frame_run_update(&frame_id, job_state).await
+        if let Err(err) = session.on_frame_run_update(&frame_id, job_state).await {
+            session.fail(err).await;
+        }
     }
 
     /// Réagit à [`Message::FrameReady`] en spawnant [`Self::run_frame`] sur
@@ -229,7 +327,9 @@ impl SessionController {
     /// ```
     async fn on_frame_ready(&self, session_id: SessionId, frame_id: FrameId) {
         let Ok(session) = self.get(&session_id).await else { return };
-        session.on_frame_ready(&frame_id).await
+        if let Err(err) = session.on_frame_ready(&frame_id).await {
+            session.fail(err).await;
+        }
     }
 
     /// Réagit à [`Message::FrameTerminated`]/[`Message::FrameRunTerminated`] :
@@ -247,7 +347,9 @@ impl SessionController {
     /// ```
     async fn on_frame_terminated(&self, session_id: SessionId, frame_id: FrameId) {
         let Ok(handler) = self.get(&session_id).await else { return };
-        handler.on_frame_terminated(&frame_id).await;  
+        if let Err(err) = handler.on_frame_terminated(&frame_id).await {
+            handler.fail(err).await;
+        }
     }
 
 
@@ -269,557 +371,31 @@ impl SessionController {
     /// // suivant, voir le correctif Send dans
     /// // `Self::handle_terminated_frame_run`/`Self::run_frame`.
     /// ```
-    async fn get(&self, id: &SessionId) -> Result<Arc<SessionHandler>, SessionError> {
+    async fn get(&self, id: &SessionId) -> Result<Arc<SessionCheckpointer>, SessionError> {
         let result = self
             .sessions
-            .try_get_with(*id, SessionHandler::new(*id, self.clone()))
+            .try_get_with(*id, SessionCheckpointer::load(*id, self.clone()))
             .map_err(|err| SessionError::StorageError(err))
             .await?;
 
         Ok(result)
     }
 
+    fn instantiate_session_handler(&self, session: Session) -> SessionCheckpointer {
+        let handler = SessionCheckpointer::load(*id, self.clone());
+    }
+
+    /// Journal de `session_id` — accès direct, sans passer par
+    /// [`Self::get`]/[`SessionHandler`] : contrairement à [`FrameTree`]/
+    /// [`Snapshots`]/[`Hitls`], [`SessionsLogs`] ne porte aucun cache à
+    /// partager entre appelants, donc pas besoin de faire charger tout
+    /// l'état d'une session (frames, clichés) juste pour y écrire une
+    /// entrée de journal.
+    pub fn logs(&self) -> SessionsLogs {
+        SessionsLogs::new(self.store.clone(), self.events.clone())
+    }
 
     fn emit(&self, msg: Message) {
         let _ =self.queue.send(msg);
-    }
-}
-
-pub struct SessionHandler {
-    store: PgStore,
-    controller: SessionController,
-    id: SessionId,
-    worker: WorkerClient,
-    graphs: Graphs,
-    session: Arc<Mutex<Session>>,
-    frames: FrameTree,
-    snapshots: Snapshots,
-}
-
-impl SessionHandler {
-    pub async fn new(id: SessionId, controller: SessionController) -> Result<Arc<Self>, sqlx::Error> {
-        let session = controller.store.get_session(&id).await.map(|session| Arc::new(Mutex::new(session)))?;
-        Ok(Arc::new(Self {
-            store: controller.store.clone(),
-            worker: controller.worker.clone(),
-            graphs: controller.graphs.clone(),
-            frames: FrameTree::new(controller.store.clone(), controller.graphs.clone(), id, session.clone()),
-            snapshots: Snapshots::new(controller.store.clone(), id),
-            controller,
-            id,
-            session
-        }))
-    }
-}
-
-impl SessionHandler {
-    pub async fn mark_as_waiting_children(&self, frame_id: &FrameId) {
-        self.frames.set_status(frame_id, FrameStatus::WaitingChildren).await;
-    }
-
-    pub async fn mark_frame_run_completed(&self, frame_id: &FrameId, response: FrameResponse) {
-        use Message::FrameRunTerminated;
-        self.frames.set_status(frame_id, FrameStatus::RunCompleted(response)).await;
-        self.controller.emit(FrameRunTerminated { session_id: self.id, frame_id: *frame_id });       
-    }
-
-    pub async fn mark_frame_run_failed(&self, frame_id: &FrameId, error: impl ToString) {
-        use Message::FrameRunTerminated;
-        self.frames.set_status(frame_id, FrameStatus::RunFailed(error.to_string())).await;
-        self.controller.emit(FrameRunTerminated { session_id: self.id, frame_id: *frame_id });      
-    }
-
-    pub async fn mark_ready_frame(&self, frame_id: &FrameId) {
-        use Message::FrameReady;
-        self.frames.set_status(frame_id, FrameStatus::Ready).await;
-        self.controller.emit(FrameReady { session_id: self.id, frame_id: *frame_id });
-    }
-    
-    pub async fn mark_failed_frame(&self, err: impl ToString, frame_id: &FrameId) {
-        use Message::FrameTerminated;
-        self.frames.set_status(frame_id, FrameStatus::Failed(err.to_string())).await;
-        self.controller.emit(FrameTerminated { session_id: self.id, frame_id: *frame_id });
-    }
-
-    pub async fn mark_completed_frame(&self, frame_id: &FrameId) {
-        use Message::{FrameTerminated, ChildFrameTerminated};
-        self.frames.set_status(frame_id, FrameStatus::Completed).await;
-        self.controller.emit(FrameTerminated { session_id: self.id, frame_id: *frame_id });
-
-        if let Some(parent_id) = self.frames.parent_of(frame_id).await {
-            self.controller.emit(ChildFrameTerminated { session_id: self.id, parent_id, child_id: *frame_id });
-        }
-    }
-}
-
-impl SessionHandler {
-    async fn run_frame(&self, frame_id:& FrameId) {
-        let args = RunFrameArgs::builder().session_id(self.id).frame_id(*frame_id).build();
-       
-        match self.worker.spawn::<RunFrame>(args, None).await  {
-            Ok(job_handle) => {
-
-                let controller = self.controller.clone();
-                let session_id = self.id;
-                let frame_id = *frame_id;
-
-                tokio::spawn(async move {
-                    use Message::FrameRunJobStateUpdate;
-                    let mut stream = job_handle.stream().boxed();
-                    while let Some(Ok(job_state)) = stream.next().await {
-                        let _ = controller.emit(FrameRunJobStateUpdate {
-                            session_id,
-                            frame_id,
-                            job_state
-                        });
-                    }
-                });
-            },
-            Err(_) => todo!(),
-        }
-    }
-
-    async fn set_root(&self, args: NewFrameNodeArgs, initial_channels: HashMap<ChannelName, Value>) -> FrameId {
-        let frame_id = self.frames.set_root(args).await;
-        let frame = self.frames.get(&frame_id).await;
-        let mut frame = frame.lock();
-        frame.inherited_channels.extend(initial_channels.into_iter());    
-        frame_id
-    }
-
-    async fn inherit_from_parent(&self, frame_id: &FrameId) {
-        let Some(parent_id) = self.frames.parent_of(frame_id).await else { return };
-        let parent_snapshot = self.snapshots.latest(&parent_id).await.unwrap();
-        let generation = parent_snapshot.lock().superstep;
-
-        let spec = self.frames.common_spec_of(&frame_id).await;
-        
-        let inherited = spec.inherited_channels
-            .into_iter()
-            .flat_map(|ch_name| parent_snapshot.lock().channels.get(&ch_name).cloned().map(|ch| (ch_name, ch)));
-
-        let frame = self.frames.get(&frame_id).await;
-        let mut frame = frame.lock();
-        frame.inherited_channels.extend(inherited);
-        frame.superstep = generation;
-    }
-
-    async fn inherit_from_prev_sibling(&self, frame_id: &FrameId) {
-        let Some(sibling) = self.frames.prev_sibling_of(frame_id).await else { return };
-        let sibling_snapshot = self.snapshots.latest(&sibling).await.unwrap();
-        let generation = sibling_snapshot.lock().superstep;
-
-        let spec = self.frames.common_spec_of(&frame_id).await;
-        
-        let inherited = spec.inherited_channels
-            .into_iter()
-            .flat_map(|ch_name| sibling_snapshot.lock().channels.get(&ch_name).cloned().map(|ch| (ch_name, ch)));
-
-        let frame = self.frames.get(&frame_id).await;
-        let mut frame = frame.lock();
-        frame.inherited_channels.extend(inherited);
-        frame.superstep = generation;
-    }
-
-
-    async fn append_frame(&self, parent_id: &FrameId, args: NewFrameNodeArgs) -> FrameId {
-        use Message::FrameCreated;
-
-        let frame_id = self.frames.append(parent_id, args).await;
-        let policy = self.frames.policy_of(&parent_id).await;
-
-        if policy.parent_policy == ParentPolicy::Sequential {
-            // on va reprendre les snapshots du précédent
-            if self.frames.iter_children_of(&parent_id).await.next().is_some() {
-                self.inherit_from_prev_sibling(&frame_id).await;
-            } else {
-                self.inherit_from_parent(&frame_id).await;
-            }
-        } else {
-            self.inherit_from_parent(&frame_id).await;
-        }
-        
-        self.controller.emit(FrameCreated { session_id: self.id, frame_id });
-
-        frame_id
-    } 
-}
-
-impl SessionHandler {
-    async fn drain_pending_accumulators(&self, frame_id: &FrameId, relevants: &[FrameId]) -> Result<Vec<ChannelUpdate>, SessionError> {
-        let mut per_channel: HashMap<ChannelName, Vec<Value>> = HashMap::new();
-        
-        for child_id in relevants {
-            let child_spec = self.frames.common_spec_of(&child_id).await;
-            let child_snapshot = self.snapshots.latest(child_id).await?;
-            for exported in &child_spec.exported_channels {
-                if let Some(value) = child_snapshot.lock().channels.get(exported).cloned() {
-                    per_channel
-                        .entry(exported.clone())
-                        .or_default()
-                        .push(value);
-                }
-            }
-        }
-
-        let updates = per_channel
-            .into_iter()
-            .flat_map(|(name, values)| {
-                values
-                    .into_iter()
-                    .map(move |value| ChannelUpdate { name: name.clone(), value, contributor: *frame_id }) 
-             })
-            .collect();
-
-        Ok(updates)
-    }
-
-    async fn commit_snapshot(&self, frame_id: &FrameId, expected_superstep: u32, updates: Vec<ChannelUpdate>, join_sources: Vec<SnapshotRef>) -> Result<SnapshotRef, SessionError> {
-        // 1. Lecture CAS
-        let last = self.snapshots.latest(frame_id).await?;
-        if last.lock().superstep != expected_superstep {
-            return Err(SessionError::StaleSuperstep { expected: expected_superstep, got: last.lock().superstep});
-        }
-
-        // 2. Copie de la carte des canaux
-        let mut channels = last.lock().channels.clone();
-
-         // 3. Application des mises à jour
-        for update in updates {
-            channels.insert(update.name.clone(), update.value);
-        }
-
-        // 4. Construction d'un nouveau cliché
-        let new_snapshot = Snapshot::new(
-            self.id, 
-            *frame_id, 
-            expected_superstep + 1, 
-            channels, 
-            join_sources
-        );
-
-        let snap_ref = self.snapshots.push(new_snapshot.clone()).await;
-        
-        Ok(snap_ref)
-    }
-}
-
-impl SessionHandler {
-    async fn append_graph_node(&self, parent_id: &FrameId, node_id: NodeId) {
-        let graph_ref = self.frames.spec_ref_of(&parent_id).await.into_graph_ref();
-        
-        let args = NewFrameNodeArgs::builder()
-            .session_id(self.id)
-            .frame_policy(FramePolicy::default())
-            .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphNode {
-                graph_ref,
-                node_id
-            })
-            .build();
-
-        self.append_frame(&parent_id, args).await;
-    }
-
-    async fn append_graph_span(&self, parent_id: &FrameId, graph_ref: &GraphRef, branches: Vec<NodeId>, join: NodeId) {
-        let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::FanIn;
-
-        let args = NewFrameNodeArgs::builder()
-            .session_id(self.id)
-            .frame_policy(policy)
-            .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphSpan { graph_ref: graph_ref.clone(), join })
-            .build();         
-
-        let span_id = self.append_frame(&parent_id, args).await;
-        self.mark_as_waiting_children(&span_id).await;
-
-        stream::iter(branches)
-            .for_each(|branch| async move {
-                self.append_graph_thread(
-                    &span_id, 
-                    graph_ref, 
-                    branch
-                ).await;
-            });
-
-
-    }
-
-    async fn append_graph_thread(&self, parent_id: &FrameId, graph_ref: &GraphRef, start: NodeId) {
-        let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::Sequential;
-
-        let args = NewFrameNodeArgs::builder()
-            .session_id(self.id)
-            .frame_policy(policy)
-            .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphThread { graph_ref: graph_ref.clone() })
-            .build();   
-
-        let thread_id = self.append_frame(&parent_id, args).await;
-        self.mark_as_waiting_children(&thread_id).await;
-
-        self.append_graph_node(&thread_id, start);
-    }
-
-    /// Ajoute un graph auprès du parent.
-    async fn append_graph(&self, parent_id: &FrameId, graph_id: &GraphId) {
-        let graph_ref = self.graphs.latest(&graph_id).await.unwrap().unwrap();
-        let graph_spec = self.graphs.get(&graph_ref).await.unwrap();
-
-        let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::Sequential;
-
-        let args = NewFrameNodeArgs::builder()
-            .session_id(self.id)
-            .frame_policy(policy)
-            .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::Graph {
-                graph_ref: graph_ref.clone(),
-            })
-            .build();   
-
-        let frame_id = self.append_frame(&parent_id, args).await;
-        self.mark_as_waiting_children(&frame_id);
-
-        self.append_graph_thread(&frame_id, &graph_ref, graph_spec.entry).await;
-        
-    }
-}
-
-impl SessionHandler {
-    pub async fn on_frame_created(&self, frame_id: &FrameId) {
-        // Si la frame est en attente, on la marque en ready
-        // Dans d'autres cas, notamment si on spawn un graph, 
-        // on créé un graph frame dont on passe automatiquement le statut en WaitingChildren
-        if FrameStatus::Pending == self.frames.status_of(frame_id).await {
-            self.mark_ready_frame(frame_id);
-        }
-    }
-
-    pub async fn on_frame_ready(&self, frame_id: &FrameId) {
-        self.run_frame(frame_id).await;
-    }
-
-    pub async fn on_frame_run_update(&self, frame_id: &FrameId, state: JobState<FrameResponse>) {
-        match state {
-            JobState::Completed(response) => self.mark_frame_run_completed(frame_id, response).await,
-            JobState::Failed { error } => self.mark_frame_run_failed(frame_id, error).await,
-            _ => {}
-        }
-    }
-
-    pub async fn on_frame_run_terminated(&self, frame_id: &FrameId) {
-        use super::protocol::FrameResult::{
-            RequestHitl,
-            AskExperts,
-            RequestToolsCalls,
-            ExecuteGraph,
-            Continue,
-            GoTo,
-            Fork,
-            Completed,
-            Failed
-        };
-
-        let FrameStatus::RunCompleted(response) = self.frames.status_of(frame_id).await else { return };
-
-        // On a des mise à jour à push dans les canaux du noeud.
-        let updates = response.updates;
-        if updates.len() > 0 {
-            let generation = self.snapshots.latest(frame_id).await.unwrap().lock().r#ref().superstep;
-            self.commit_snapshot(frame_id, generation, updates, vec![]).await;
-        }
-        
-        match response.result {
-            RequestHitl(hitl) => {},
-            AskExperts(expert_ids) => todo!(),
-            RequestToolsCalls(request_tool_calls) => todo!(),
-            ExecuteGraph(graph_id) => {
-                
-            },
-            Continue => {
-                let Some(parent_id) = self.frames.parent_of(frame_id).await else { return };
-                let FrameData::GraphNode { graph_ref, node_id } = self.frames.data_of(frame_id).await else { return };
-                let graph_spec = self.graphs.get(&graph_ref).await.unwrap();
-                let Some(next) = graph_spec.edges.get(&node_id) else { return };
-                self.append_graph_node(&parent_id, next.clone()).await;
-                self.mark_completed_frame(frame_id).await;
-            },
-            GoTo(node_id) => {
-                let Some(parent_id) = self.frames.parent_of(frame_id).await else { return };
-                self.append_graph_node(&parent_id, node_id).await;
-                self.mark_completed_frame(frame_id).await;
-            },
-            Fork { branches, join } => {
-                let Some(parent_id) = self.frames.parent_of(frame_id).await else { return };
-                let graph_ref = self.frames.spec_ref_of(&parent_id).await.into_graph_ref();
-                self.append_graph_span(&parent_id, &graph_ref, branches, join).await;
-                self.mark_completed_frame(frame_id).await;
-            },
-            Completed => {
-                self.mark_completed_frame(frame_id).await;
-            }
-            Failed(err) => {
-                self.mark_failed_frame(err, frame_id).await;
-            }
-        }
-    }  
-
-    pub async fn on_frame_terminated(&self, frame_id: &FrameId) {
-        todo!("...")
-    }
-
-    pub async fn on_child_frame_terminated(&self, frame_id: &FrameId, child_id: &FrameId) {
-        use super::frames::ChildFailurePolicy::{FailIfAtLeastHasFailed, DontFail};
-        use crate::session::frames::ParentPolicy::{Sequential, FanIn};
-        
-        let child_status = self.frames.status_of(child_id).await;
-        let parent_policy = self.frames.policy_of(frame_id).await;
-
-        // on traite d'abord des enfants qui ont échoués
-        // et de comment le parent doit réagir en fonction
-        // de sa politique.
-        if let FrameStatus::Failed(_) = child_status {
-            match parent_policy.child_failure_policy {
-                FailIfAtLeastHasFailed(count) if count_failed_frame_child(&self.frames, frame_id).await >= count => 
-                {
-                    self.mark_failed_frame(format!("au moins {count} enfants ont échoué"), frame_id);
-                    return;
-                },
-
-                DontFail | FailIfAtLeastHasFailed(_) => {},
-            }
-        }
-        
-        match parent_policy.parent_policy {
-            Sequential => {
-                // par défaut un sequential sans enfants resume (c'est pas supposé arrivé)
-                let Some(last_child) = self.frames.last_child_of(frame_id).await else {
-                    self.mark_ready_frame(frame_id);
-                    return;
-                };
-
-                let child_status = self.frames.status_of(&last_child).await;
-                // commit_snapshot
-                if let FrameStatus::Completed = child_status {
-                    let generation = self.snapshots.latest(frame_id).await.unwrap().lock().r#ref().superstep;
-                    let child_snapshot_ref = self.snapshots.latest(frame_id).await.unwrap().lock().r#ref();
-                    let updates = self.drain_pending_accumulators(frame_id, &[last_child]).await.unwrap();
-                    self.commit_snapshot(
-                        frame_id, 
-                        generation, 
-                        updates, 
-                        vec![child_snapshot_ref]
-                    ).await;
-                }
-                self.mark_ready_frame(frame_id).await;
-            },
-            FanIn if all_children_have_terminated(&self.frames, frame_id).await  => {
-                // commmit
-                let generation = self.snapshots.latest(frame_id).await.unwrap().lock().r#ref().superstep;
-                let relevant_children: Vec<_> = stream::iter(self.frames.iter_children_of(&frame_id).await)
-                    .filter(|child_id| {
-                        let child_id = *child_id;
-                        async move { self.frames.status_of(&child_id).await.has_completed() }
-                    })
-                    .collect()
-                    .await;
-                
-                let join_sources = stream::iter(relevant_children.iter().copied())
-                    .then(|frame_id| async move { self.snapshots.latest(&frame_id).await.unwrap().lock().r#ref() })
-                    .collect()
-                    .await;
-
-                let updates = self.drain_pending_accumulators(frame_id, &relevant_children).await.unwrap();
-                self.commit_snapshot(
-                    frame_id, 
-                    generation, 
-                    updates, 
-                    join_sources
-                ).await;
-
-                self.mark_ready_frame(frame_id).await;
-            }
-            FanIn => {}
-        }
-
-
-    }
-}
-
-
-/// Vrai si chaque frame de `iter` (typiquement [`FrameNode::iter_children`])
-/// a atteint un statut terminal (voir [`FrameNode::has_terminated`]) —
-/// utilisée par [`SessionController::handle_terminated_frame`] pour décider
-/// si le parent peut passer à l'agrégation
-/// ([`Message::AllChildrenFrameHaveTerminated`]). Fonction libre plutôt que
-/// méthode de [`SessionController`] : ne dépend que d'un [`FrameTree`] et
-/// d'un itérateur, pas du reste de son état (store, cache, queue).
-///
-/// # Exemple
-///
-/// ```ignore
-/// if all_have_terminated(&guard.frames, parent.iter_children()) {
-///     let _ = self.queue.send(Message::AllChildrenFrameHaveTerminated { session_id, parent_id });
-/// }
-/// ```
-async fn all_have_terminated(tree: &FrameTree, iter: impl Iterator<Item=FrameId>) -> bool {
-    stream::iter(iter)
-        .all(|id| async move { tree.get(&id).await.lock().has_terminated() })
-        .await
-}
-
-async fn all_children_have_terminated(tree: &FrameTree, parent_id: &FrameId) -> bool {
-    all_have_terminated(tree, tree.iter_children_of(parent_id).await.into_iter()).await
-}
-
-async fn count_failed_frame_child(tree: &FrameTree, parent_id: &FrameId) -> usize {
-    let childs =    tree.iter_children_of(parent_id)
-        .await
-        .into_iter();
-    
-    stream::iter(childs)
-        .filter(|child_id| {
-            let child_id = *child_id;
-            async move { tree.status_of(&child_id).await.has_failed() }
-        })
-        .count()
-        .await
-}
-
-enum Message {
-    FrameCreated {
-        session_id: SessionId,
-        frame_id: FrameId
-    },
-    FrameRunJobStateUpdate {
-        session_id: SessionId,
-        frame_id: FrameId,
-        job_state: JobState<FrameResponse>,
-    },
-    /// The frame is ready to run
-    FrameReady {
-        session_id: SessionId,
-        frame_id: FrameId,
-    },
-    FrameRunTerminated {
-        session_id: SessionId,
-        frame_id: FrameId,
-    },
-    ChildFrameTerminated {
-        session_id: SessionId,
-        parent_id: FrameId,
-        child_id: FrameId 
-    },
-    /// A frame has terminated
-    FrameTerminated {
-        session_id: SessionId,
-        frame_id: FrameId
     }
 }

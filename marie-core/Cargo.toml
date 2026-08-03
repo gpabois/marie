@@ -71,7 +71,7 @@ jsonschema.workspace = true
 schemars.workspace = true
 moka = {workspace = true, features=["future"]}
 openraft.workspace = true
-rquickjs.workspace = true
+rune.workspace = true
 anyhow.workspace = true
 
 [dev-dependencies]
@@ -99,4 +99,9 @@ worker-watchdog = []
 model-server = ["rpc-executor"]
 tools-server = ["rpc-executor"]
 tool-executor = ["job-executor"]
+# Exécution native des nodes de graphe (`Nodable::execute`) — sur le même
+# principe que `tool-executor` pour `Toolable`, sans dépendre du système de
+# jobs (une node s'exécute dans le déroulé du graphe, pas comme un job
+# assigné à un worker).
+node-executor = []
 postgres = []
