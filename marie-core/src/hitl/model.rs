@@ -2,6 +2,8 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::hitl::service::HitlError;
+
 /// Type de réponse attendu pour une [`Question`] — détermine à la fois le
 /// composant présenté à l'humain (côté passerelle) et la forme attendue de
 /// l'[`Answer`] correspondante (voir [`validate_answers`]).
@@ -90,6 +92,12 @@ pub enum Answer {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Answers(HashMap<String, Answer>);
 
+impl From<HashMap<String, Answer>> for Answers {
+    fn from(value: HashMap<String, Answer>) -> Self {
+        Self(value)
+    }
+}
+
 /// Vérifie que `answers` répond à chacune de `questions` avec une valeur du
 /// type attendu (voir [`QuestionKind`]) — helper côté appelant/passerelle
 /// (ex. avant de soumettre à [`crate::session::client::SessionClient::report_user_input`]) :
@@ -97,35 +105,35 @@ pub struct Answers(HashMap<String, Answer>);
 /// doc de `report_user_input`, c'est ce qui permet à un input spontané de
 /// partager la même mutation qu'une réponse structurée sans avoir à
 /// satisfaire un schéma qu'il ne connaît pas).
-pub fn validate_answers(questions: &[Question], answers: HashMap<String, Answer>) -> Result<Answers, String> {
+pub fn validate_answers(questions: &[Question], answers: HashMap<String, Answer>) -> Result<Answers, HitlError> {
     for question in questions {
         let Some(answer) = answers.get(&question.key) else {
-            return Err(format!("réponse manquante pour '{}'", question.key));
+            return Err(HitlError::ValidationError(format!("réponse manquante pour '{}'", question.key)));
         };
 
         match (&question.kind, answer) {
             (QuestionKind::ShortText | QuestionKind::LongText, Answer::Single(_)) => {}
             (QuestionKind::Select { options } | QuestionKind::Radio { options }, Answer::Single(choice)) => {
                 if !options.contains(choice) {
-                    return Err(format!("'{choice}' n'est pas une option valide pour '{}'", question.key));
+                    return Err(HitlError::ValidationError(format!("'{choice}' n'est pas une option valide pour '{}'", question.key)));
                 }
             }
             (QuestionKind::Checkboxes { options }, Answer::Multiple(choices)) => {
                 if let Some(invalid) = choices.iter().find(|choice| !options.contains(choice)) {
-                    return Err(format!("'{invalid}' n'est pas une option valide pour '{}'", question.key));
+                    return Err(HitlError::ValidationError(format!("'{invalid}' n'est pas une option valide pour '{}'", question.key)));
                 }
             }
             (QuestionKind::FileUpload { accept }, Answer::Single(filename)) => {
                 if filename.trim().is_empty() {
-                    return Err(format!("nom de fichier manquant pour '{}'", question.key));
+                    return Err(HitlError::ValidationError(format!("nom de fichier manquant pour '{}'", question.key)));
                 }
                 let accepted = accept.is_empty() || accept.iter().any(|ext| filename.to_lowercase().ends_with(&ext.to_lowercase()));
                 if !accepted {
-                    return Err(format!("'{filename}' n'a pas une extension acceptée pour '{}'", question.key));
+                    return Err(HitlError::ValidationError(format!("'{filename}' n'a pas une extension acceptée pour '{}'", question.key)));
                 }
             }
             _ => {
-                return Err(format!("type de réponse inattendu pour '{}'", question.key));
+                return Err(HitlError::ValidationError(format!("type de réponse inattendu pour '{}'", question.key)));
             }
         }
     }

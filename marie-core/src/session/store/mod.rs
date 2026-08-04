@@ -9,6 +9,7 @@ use sqlx::postgres::PgRow;
 #[cfg(feature = "catalog")]
 use sqlx::types::Json;
 
+use crate::entity::UnitOfWorkExecutor;
 use crate::session::dto::SessionView;
 use crate::hitl::store::{InMemoryHitlStore, StoreHitl};
 use crate::session::frames::store::StoreSessionFrame;
@@ -28,6 +29,14 @@ pub trait StoreSession: StoreSessionFrame + StoreHitl + StoreSessionLogs + Store
     async fn session_exists(&self, id: &SessionId) -> crate::Result<bool>;
     async fn upsert_session(&self, session: Session) -> crate::Result<()>;
     async fn delete_session(&self, id: &SessionId) -> crate::Result<Session>;
+
+    /// Toutes les sessions connues, sans filtre ni pagination — utilisé par
+    /// `SessionController::list_sessions` (voir
+    /// [`crate::session::controller::SessionController`]), un consommateur
+    /// de gestion (ex. `list sessions` du CLI) qui a besoin de la liste
+    /// complète, pas d'une vue agrégée par session comme
+    /// [`Self::get_session_view`].
+    async fn list_sessions(&self) -> crate::Result<Vec<Session>>;
 
     /// Vue agrégée d'une session — assemble [`Self::get_session`] (existence
     /// + métadonnées), [`Self::list_log`] (journal complet) et
@@ -55,12 +64,26 @@ pub trait StoreSession: StoreSessionFrame + StoreHitl + StoreSessionLogs + Store
 pub struct SessionStore(Arc<dyn StoreSession + Send + Sync + 'static>);
 
 impl SessionStore {
-    pub fn new(store: Arc<dyn StoreSession + Send + Sync + 'static>) -> Self {
-        Self(store)
+    pub fn new(store: impl StoreSession + Send + Sync + 'static) -> Self {
+        Self(Arc::new(store))
     }
 
     pub fn in_memory() -> Self {
-        Self::new(Arc::new(InMemorySessionStore::new()))
+        Self::new(InMemorySessionStore::new())
+    }
+}
+
+#[async_trait]
+impl UnitOfWorkExecutor<Session> for SessionStore {
+    async fn insert(&self, entity: &Session) -> crate::Result<()> {
+        self.upsert_session(entity.clone()).await
+    }
+    async fn replace(&self, entity: &Session) -> crate::Result<()> {
+        self.upsert_session(entity.clone()).await
+    }
+    async fn delete(&self, entity: &Session) -> crate::Result<()> {
+        self.delete_session(&entity.id).await;
+        Ok(())
     }
 }
 
@@ -105,7 +128,6 @@ impl Deref for SessionStore {
 /// `impl `[`StoreSessionSnapshot`]` for `[`PgStore`] (voir
 /// `crate::session::snapshot::store`), `StoreSession` en hérite via son
 /// supertrait.
-#[cfg(feature = "catalog")]
 #[async_trait]
 impl StoreSession for PgStore {
     async fn get_session(&self, id: &SessionId) -> crate::Result<Session> {
@@ -155,6 +177,16 @@ impl StoreSession for PgStore {
         Ok(decode_row(row)?)
     }
 
+    async fn list_sessions(&self) -> crate::Result<Vec<Session>> {
+        let rows = sqlx::query(
+            "SELECT id, root_frame, status, created_at, last_updated_at FROM marie_sessions",
+        )
+        .fetch_all(self.pool())
+        .await?;
+
+        Ok(rows.into_iter().map(decode_row).collect::<Result<Vec<_>, _>>()?)
+    }
+
     async fn get_session_view(&self, session_id: SessionId) -> crate::Result<SessionView> {
         let session = self.get_session(&session_id).await?;
         let logs = self.list_log(session_id).await?;
@@ -176,7 +208,6 @@ impl StoreSession for PgStore {
 /// qu'un `SessionId` que nous avons nous-mêmes écrit, ce qui ne peut pas
 /// arriver en pratique (`id` est `PRIMARY KEY`, jamais écrit ailleurs que
 /// [`StoreSession::upsert_session`]).
-#[cfg(feature = "catalog")]
 fn decode_row(row: PgRow) -> Result<Session, sqlx::Error> {
     Ok(Session {
         id: row
@@ -262,6 +293,10 @@ impl StoreSession for InMemorySessionStore {
 
     async fn delete_session(&self, id: &SessionId) -> crate::Result<Session> {
         Ok(self.sessions.lock().remove(id).ok_or(InMemorySessionStoreError::SessionNotFound(*id))?)
+    }
+
+    async fn list_sessions(&self) -> crate::Result<Vec<Session>> {
+        Ok(self.sessions.lock().values().cloned().collect())
     }
 
     async fn get_session_view(&self, session_id: SessionId) -> crate::Result<SessionView> {

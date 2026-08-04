@@ -53,12 +53,12 @@ pub trait StoreSessionLogs {
 pub struct SessionLogStore(Arc<dyn StoreSessionLogs + Send + Sync + 'static>);
 
 impl SessionLogStore {
-    pub fn new(store: Arc<dyn StoreSessionLogs + Send + Sync + 'static>) -> Self {
-        Self(store)
+    pub fn new(store: impl StoreSessionLogs + Send + Sync + 'static) -> Self {
+        Self(Arc::new(store))
     }
 
     pub fn in_memory() -> Self {
-        Self::new(Arc::new(InMemorySessionLogsStore::new()))
+        Self::new(InMemorySessionLogsStore::new())
     }
 }
 

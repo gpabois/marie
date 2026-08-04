@@ -1,4 +1,4 @@
-use std::{any::{Any, TypeId}, collections::HashMap, ops::Deref, sync::Arc};
+use std::{any::{Any, TypeId}, collections::HashMap, sync::Arc};
 
 use parking_lot::Mutex;
 
@@ -31,7 +31,11 @@ pub trait Resolve<T, Args=()>: Sized{
 }
 
 pub trait Get<T> {
-    fn get(&self) -> T;
+    fn try_get(&self) -> Option<T>;
+    
+    fn get(&self) -> T {
+        self.try_get().unwrap()
+    }
 }
 
 #[derive(Default, Clone)]
@@ -42,7 +46,7 @@ impl<T, Args> Resolve<T, Args> for Container
         T: Constructible<Self, Args> + Clone + Send + Sync + 'static
 {
     fn resolve(&self, args: Args) -> T {
-        let Some(instance) = self.get() else {
+        let Some(instance) = self.try_get() else {
             let instance = T::construct(self, args);
             self.register(instance.clone());
             return instance;
@@ -53,14 +57,18 @@ impl<T, Args> Resolve<T, Args> for Container
 }
 
 impl<T> Get<T> for Container where T: Clone + Send + Sync + 'static {
-    fn get(&self) -> T {
-        let type_id = TypeId::of::<Arc<T>>();
+    fn try_get(&self) -> Option<T> {
+        // La clé et la cible du downcast doivent correspondre exactement à
+        // ce que `Container::register` stocke : `TypeId::of::<T>()` comme
+        // clé, un `Arc<dyn Any>` dont le type érasé est `T` (pas `Arc<T>`)
+        // comme valeur — `Arc::new(instance)` s'y coerce en `Arc<dyn Any>`
+        // en érasant `T`, pas `Arc<T>`.
+        let type_id = TypeId::of::<T>();
         self.0
             .lock()
             .get(&type_id)
-            .and_then(|any_ptr| any_ptr.clone().downcast::<Arc<T>>().ok())
-            .map(|boxed_arc| (*boxed_arc).deref().deref().clone())
-            .unwrap()
+            .and_then(|any_ptr| any_ptr.clone().downcast::<T>().ok())
+            .map(|boxed| (*boxed).clone())
     }
 }
 

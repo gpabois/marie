@@ -25,12 +25,12 @@ macro_rules! ask_experts {
     ($ctx:expr, $($request:expr),+ $(,)?) => {{
         let __requests = vec![$($request),+];
         let __log = $ctx.logs.reserve_log(
-            $crate::session::run_log::RunLogContent::AskExpertLog { requests: __requests.clone() }
+            $crate::session::run_log::RunLogContent::ConsultExpertsLog { requests: __requests.clone() }
         );
         match $ctx.logs.check(&__log) {
             ::std::option::Option::Some(__value) => {
                 let __values: ::std::vec::Vec<::serde_json::Value> = ::serde_json::from_value(__value)
-                    .expect("RunLogs: AskExpertLog résolu n'est pas un tableau");
+                    .expect("RunLogs: ConsultExpertsLog résolu n'est pas un tableau");
                 let mut __iter = __values.into_iter();
                 // Virgule finale ajoutée systématiquement : sans elle, une
                 // seule requête produirait `( expr )` — une simple
@@ -41,43 +41,43 @@ macro_rules! ask_experts {
                 // déplacerait ses valeurs une seconde fois.
                 ( $( {
                     let _ = stringify!($request);
-                    ::serde_json::from_value(__iter.next().expect("RunLogs: arité résolue insuffisante pour AskExpertLog"))
+                    ::serde_json::from_value(__iter.next().expect("RunLogs: arité résolue insuffisante pour ConsultExpertsLog"))
                         .expect("RunLogs: réponse d'expert non désérialisable")
                 } ),+ ,)
             }
             ::std::option::Option::None => {
-                return Ok($crate::session::protocol::FrameResult::AskExperts(__requests));
+                return Ok($crate::session::protocol::FrameResult::ConsultExperts(__requests));
             }
         }
     }};
 }
 
 /// `let (foo, bar): (Foo, Bar) = call_tools!(ctx, tc_a, tc_b);` — même
-/// principe que [`ask_experts!`], pour `FrameResult::RequestToolsCalls`/
+/// principe que [`ask_experts!`], pour `FrameResult::CallTools`/
 /// `ToolAggregator`.
 #[macro_export]
 macro_rules! call_tools {
     ($ctx:expr, $($request:expr),+ $(,)?) => {{
         let __requests = vec![$($request),+];
         let __log = $ctx.logs.reserve_log(
-            $crate::session::run_log::RunLogContent::ToolCallLog { requests: __requests.clone() }
+            $crate::session::run_log::RunLogContent::CallToolsLog { requests: __requests.clone() }
         );
         match $ctx.logs.check(&__log) {
             ::std::option::Option::Some(__value) => {
                 let __values: ::std::vec::Vec<::serde_json::Value> = ::serde_json::from_value(__value)
-                    .expect("RunLogs: ToolCallLog résolu n'est pas un tableau");
+                    .expect("RunLogs: CallToolsLog résolu n'est pas un tableau");
                 let mut __iter = __values.into_iter();
                 // Voir les mêmes remarques dans `ask_experts!` (virgule
                 // finale systématique, `stringify!` pour ne pas réévaluer
                 // `$request` une seconde fois).
                 ( $( {
                     let _ = stringify!($request);
-                    ::serde_json::from_value(__iter.next().expect("RunLogs: arité résolue insuffisante pour ToolCallLog"))
+                    ::serde_json::from_value(__iter.next().expect("RunLogs: arité résolue insuffisante pour CallToolsLog"))
                         .expect("RunLogs: résultat d'outil non désérialisable")
                 } ),+ ,)
             }
             ::std::option::Option::None => {
-                return Ok($crate::session::protocol::FrameResult::RequestToolsCalls(__requests));
+                return Ok($crate::session::protocol::FrameResult::CallTools(__requests));
             }
         }
     }};

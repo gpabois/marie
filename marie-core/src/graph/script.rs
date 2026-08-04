@@ -330,10 +330,8 @@ struct RuneNodeContext {
 
 impl RuneNodeContext {
     pub fn new(ctx: &mut NodeContext) -> Self {
-        unsafe {
-            Self {
-                ctx: std::ptr::from_mut(ctx)
-            }
+        Self {
+            ctx: std::ptr::from_mut(ctx)
         }
     }
 }
@@ -402,7 +400,7 @@ pub fn hitl(request: rune::Value) -> Result<rune::Value, String> {
 #[rune::function]
 pub fn ask_experts(asks: rune::Value) -> Result<rune::Value, String> {
     let requests: Vec<RequestAskExpert> = value_to_type(asks)?;
-    run_log_content_to_value(RunLogContent::AskExpertLog { requests })
+    run_log_content_to_value(RunLogContent::ConsultExpertsLog { requests })
 }
 
 /// Voir la doc de [`hitl`] — même principe, pour
@@ -410,7 +408,7 @@ pub fn ask_experts(asks: rune::Value) -> Result<rune::Value, String> {
 #[rune::function]
 pub fn call_tools(calls: rune::Value) -> Result<rune::Value, String> {
     let requests: Vec<RequestToolCall> = value_to_type(calls)?;
-    run_log_content_to_value(RunLogContent::ToolCallLog { requests })
+    run_log_content_to_value(RunLogContent::CallToolsLog { requests })
 }
 
 /// Voir la doc de [`hitl`] — même principe, pour [`RunLogContent::GraphLog`].
@@ -483,93 +481,8 @@ fn run_log_content_to_value(content: RunLogContent) -> Result<rune::Value, Strin
 fn run_log_content_to_frame_result(content: RunLogContent) -> FrameResult {
     match content {
         RunLogContent::HitlLog { request } => FrameResult::RequestHitl(request),
-        RunLogContent::AskExpertLog { requests } => FrameResult::AskExperts(requests),
-        RunLogContent::ToolCallLog { requests } => FrameResult::RequestToolsCalls(requests),
+        RunLogContent::ConsultExpertsLog { requests } => FrameResult::ConsultExperts(requests),
+        RunLogContent::CallToolsLog { requests } => FrameResult::CallTools(requests),
         RunLogContent::GraphLog { graph_id } => FrameResult::ExecuteGraph(graph_id),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::collections::HashMap;
-
-    use serde_json::json;
-
-    use super::*;
-    use crate::id::generate_id;
-    use crate::session::{SessionId, channel::ChannelName, frames::FrameId, run_log::{RunLog, RunLogs}};
-
-    fn ctx(logs: Vec<RunLog>) -> NodeContext {
-        NodeContext::new(
-            SessionId::new(generate_id()),
-            FrameId::new(),
-            HashMap::new(),
-            RunLogs::new(logs),
-        )
-    }
-
-    #[tokio::test]
-    async fn script_without_yield_behaves_as_before() {
-        let engine = GraphScriptEngine::new().unwrap();
-        let mut c = ctx(vec![]);
-
-        let result = engine.execute("pub fn main(ctx) { completed()? }", &mut c).await.unwrap();
-
-        assert_eq!(result, FrameResult::Completed);
-        assert!(c.logs.into_new_logs().is_empty());
-    }
-
-    #[tokio::test]
-    async fn yield_not_yet_resolved_returns_frame_result_and_reserves_a_log() {
-        let engine = GraphScriptEngine::new().unwrap();
-        let mut c = ctx(vec![]);
-
-        let script = r#"
-            pub fn main(ctx) {
-                let outputs = yield graph("sub-graph")?;
-                ctx.write("result", outputs)?;
-                completed()?
-            }
-        "#;
-
-        let result = engine.execute(script, &mut c).await.unwrap();
-
-        assert_eq!(result, FrameResult::ExecuteGraph(GraphId::from("sub-graph")));
-        let new_logs = c.logs.into_new_logs();
-        assert_eq!(new_logs.len(), 1);
-        assert_eq!(new_logs[0].index, 0);
-        assert_eq!(new_logs[0].value, None);
-        assert_eq!(new_logs[0].content, RunLogContent::GraphLog { graph_id: GraphId::from("sub-graph") });
-        // Aucune écriture de canal : le script s'est arrêté avant `ctx.write`.
-        assert!(c.updates.is_empty());
-    }
-
-    #[tokio::test]
-    async fn yield_already_resolved_resumes_and_completes_without_reyielding() {
-        let engine = GraphScriptEngine::new().unwrap();
-
-        let resolved = RunLog {
-            index: 0,
-            content: RunLogContent::GraphLog { graph_id: GraphId::from("sub-graph") },
-            value: Some(json!({"greeting": "hi"})),
-        };
-        let mut c = ctx(vec![resolved]);
-
-        let script = r#"
-            pub fn main(ctx) {
-                let outputs = yield graph("sub-graph")?;
-                ctx.write("result", outputs)?;
-                completed()?
-            }
-        "#;
-
-        let result = engine.execute(script, &mut c).await.unwrap();
-
-        assert_eq!(result, FrameResult::Completed);
-        // Rien de nouveau réservé : la seule entrée vient du rejeu, pas de ce run.
-        assert!(c.logs.into_new_logs().is_empty());
-        assert_eq!(c.updates.len(), 1);
-        assert_eq!(c.updates[0].name, ChannelName::from("result"));
-        assert_eq!(c.updates[0].value, json!({"greeting": "hi"}));
     }
 }

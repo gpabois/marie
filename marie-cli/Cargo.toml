@@ -1,0 +1,18 @@
+[package]
+name = "marie-cli"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+rustyline = { workspace = true }
+futures = { workspace = true }
+tokio-stream = { workspace = true }
+serde_json = { workspace = true }
+marie = { path = "../marie", features = ["catalog"] }
+strum = { workspace = true, features = ["derive"] }
+thiserror = "2.0"
+dotenvy = "0.15.7"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+hex = "0.4"

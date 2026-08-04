@@ -1,12 +1,11 @@
-use std::{collections::HashMap, ops::{Deref, DerefMut}, sync::Arc};
+use std::{ops::{Deref, DerefMut}, sync::Arc};
 
 use chrono::{DateTime, Utc};
 use moka::future::Cache;
 use parking_lot::Mutex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
-use crate::{di::{Constructible, Get}, session::{SessionId, channel::ChannelName, controller::SessionError, frames::FrameId, snapshot::store::SessionSnapshotStore}};
+use crate::{di::{Constructible, Get}, session::{SessionId, channel::Channels, controller::SessionError, frames::FrameId, snapshot::store::SessionSnapshotStore}};
 
 pub mod store;
 
@@ -22,14 +21,14 @@ pub struct Snapshot {
     pub session_id: SessionId,
     pub frame_id: FrameId,
     pub superstep: u32,
-    pub channels: HashMap<ChannelName, Value>,
+    pub channels: Channels,
     pub join_sources: Vec<SnapshotRef>,
     pub created_at: DateTime<Utc>,
     pub pin_count: u32
 }
 
 impl Snapshot {
-    pub fn new(session_id: SessionId, frame_id: FrameId, superstep: u32, channels: HashMap<ChannelName, Value>, join_sources: Vec<SnapshotRef>) -> Self {
+    pub fn new(session_id: SessionId, frame_id: FrameId, superstep: u32, channels: Channels, join_sources: Vec<SnapshotRef>) -> Self {
         Self {
             session_id,
             frame_id,
@@ -162,6 +161,7 @@ impl<C> Constructible<C> for SessionSnapshotsFactory where
 /// (`(session_id, frame_id, superstep)`, sa clé primaire — voir la doc de
 /// [`StoreSession::upsert_snapshot`]) plutôt que par `frame_id` seul,
 /// puisque plusieurs clichés coexistent pour un même frame.
+#[derive(Clone)]
 pub struct SessionSnapshots {
     store: SessionSnapshotStore,
     session_id: SessionId,

@@ -28,6 +28,12 @@ impl ExpertAskId {
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, JsonSchema)]
 pub struct ExpertId(String);
 
+impl From<ExpertId> for serde_json::Value {
+    fn from(value: ExpertId) -> Self {
+        serde_json::to_value(value).unwrap()
+    }
+}
+
 impl ExpertId {
     pub fn new(id: impl ToString) -> Self {
         Self(id.to_string())

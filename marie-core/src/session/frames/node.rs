@@ -1,19 +1,18 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use typed_builder::TypedBuilder;
 
-use crate::{hitl::HitlId, session::{SessionId, channel::ChannelName, run_log::RunLog, snapshot::SnapshotRef}};
-use super::{FramePolicy, FrameStatus, FrameId, FrameSpecRef, FrameData};
+use crate::{hitl::HitlId, session::{SessionId, channel::Channels, run_log::RunLog, snapshot::SnapshotRef}};
+use super::{FramePolicy, FrameStatus, FrameId, FrameSpecRef, FrameKind};
 
 #[derive(TypedBuilder)]
 pub struct NewFrameNodeArgs {
     session_id: SessionId,
     spec_ref: FrameSpecRef,
-    data: FrameData,
+    data: FrameKind,
     #[builder(default)]
-    inherited_channels: HashMap<ChannelName, Value>,
+    inherited_channels: Channels,
     #[builder(default, setter(strip_option))]
     forked_from: Option<SnapshotRef>,
     #[builder(default)]
@@ -33,9 +32,9 @@ pub struct FrameNode {
     pub superstep: u32,
     pub barrier: bool,
     pub forked_from: Option<SnapshotRef>,
-    pub inherited_channels: HashMap<ChannelName, Value>,
+    pub inherited_channels: Channels,
     pub spec_ref: FrameSpecRef,
-    pub data: FrameData,
+    pub data: FrameKind,
     #[serde(default)]
     pub logs: Vec<RunLog>,
     /// Alias reliant l'index d'une entrée de [`Self::logs`] à l'[`HitlId`]

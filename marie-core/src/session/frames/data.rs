@@ -5,15 +5,11 @@ use crate::{expert::{ExpertAskId, ExpertId}, graph::{GraphRef, NodeId}, hitl::{H
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag="kind")]
-pub enum FrameData {
+pub enum FrameKind {
     Void,
     Shell(ShellMode),
     Hitl(HitlId),
-    AskExpert {
-        id: ExpertAskId,
-        expert_id: ExpertId,
-        task: String
-    },
+    ExpertConsultation,
     ToolCall {
         id: ToolCallId,
         name: ToolName,

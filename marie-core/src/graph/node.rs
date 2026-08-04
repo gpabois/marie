@@ -12,7 +12,7 @@ use serde_json::Value;
 #[cfg(feature = "node-executor")]
 use crate::session::protocol::FrameResult;
 use crate::{
-    graph::Graphs, session::{SessionId, channel::{ChannelName, ChannelUpdate}, frames::FrameId, run_log::RunLogs, spec::CommonSpec}
+    graph::Graphs, session::{SessionId, channel::{ChannelName, ChannelUpdate, Channels, ChannelsTracker}, frames::FrameId, run_log::RunLogs, spec::CommonSpec}
 };
 
 
@@ -77,8 +77,7 @@ pub struct NodeContext {
     /// de chaque écriture, pour que le réducteur sache quelle contribution
     /// vient d'où.
     pub frame_id: FrameId,
-    pub(crate) channels: HashMap<ChannelName, Value>,
-    pub updates: Vec<ChannelUpdate>,
+    pub(crate) channels: ChannelsTracker,
     /// Journal de rejeu déterministe de ce frame — voir
     /// [`crate::session::run_log::RunLogs`] et les macros `ask_experts!`/
     /// `call_tools!`/`hitl!`/`graph!` qui l'utilisent.
@@ -91,8 +90,8 @@ impl NodeContext {
     /// [`CommonSpec::overrides_channels`] sont appliquées par
     /// `SessionHandler` sur ces canaux hérités avant même la construction du
     /// `NodeContext`, donc déjà présentes ici.
-    pub fn new(session_id: SessionId, frame_id: FrameId, channels: HashMap<ChannelName, Value>, logs: RunLogs) -> Self {
-        Self { session_id, frame_id, channels, updates: Vec::new(), logs }
+    pub fn new(session_id: SessionId, frame_id: FrameId, channels: ChannelsTracker, logs: RunLogs) -> Self {
+        Self { session_id, frame_id, channels, logs }
     }
 
     /// N'écrit jamais directement dans `channels` : empile un
@@ -100,10 +99,7 @@ impl NodeContext {
     /// suivantes de ce même canal (voir [`Self::read`]) sans attendre que le
     /// réducteur du canal l'ait combiné à l'état hérité.
     pub fn write(&mut self, name: impl Into<ChannelName>, value: impl Serialize) -> crate::Result<()> {
-        let name = name.into();
-        let value = serde_json::to_value(value).unwrap();
-        self.updates.push(ChannelUpdate { name, value, contributor: self.frame_id });
-        Ok(())
+        self.channels.write(name, value)
     }
 
     /// Le [`ChannelUpdate`] le plus récent déjà écrit pour `name` au cours de
@@ -111,17 +107,7 @@ impl NodeContext {
     /// réducteur) — sinon la valeur héritée du `Snapshot` (voir la doc de
     /// [`Self`]).
     pub fn read<V: DeserializeOwned>(&self, name: impl Into<ChannelName>) -> crate::Result<V> {
-        let name = name.into();
-
-        let value = self.updates.iter().rev()
-            .find(|update| update.name == name)
-            .map(|update| &update.value)
-            .or_else(|| self.channels.get(&name))
-            .cloned()
-            .ok_or_else(|| crate::err!("no channel {name} exists"))?;
-
-        let value = serde_json::from_value(value)?;
-        Ok(value)
+        self.channels.read(name)
     }
 }
 

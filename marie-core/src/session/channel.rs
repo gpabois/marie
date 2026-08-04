@@ -1,12 +1,18 @@
-use std::{collections::HashMap, fmt::Display};
-
-use serde::{Deserialize, Serialize};
+use std::{borrow::Borrow, collections::HashMap, fmt::Display};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
 use crate::session::frames::FrameId;
 
 #[derive(Debug, Hash, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ChannelName(String);
+
+impl Borrow<str> for ChannelName {
+    #[inline]
+    fn borrow(&self) -> &str {
+        &self.0[..]
+    }
+}
 
 impl Display for ChannelName {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -86,8 +92,71 @@ pub struct ChannelUpdate {
     pub contributor: FrameId
 }
 
-#[derive(Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone)]
+pub struct ChannelsTracker {
+    frame_id: FrameId,
+    channels: Channels,
+    updates: Vec<ChannelUpdate>
+}
+
+impl ChannelsTracker {
+    pub fn new(frame_id: FrameId, channels: Channels) -> Self {
+        Self {
+            frame_id,
+            channels,
+            updates: vec![]
+        }
+    }
+
+    pub fn into_updates(self) -> Vec<ChannelUpdate> {
+        self.updates
+    }
+}
+
+impl ChannelsTracker {
+    pub fn write(&mut self, name: impl Into<ChannelName>, value: impl Serialize) -> crate::Result<()> {
+        let name = name.into();
+        let value = serde_json::to_value(value).unwrap();
+        self.updates.push(ChannelUpdate { name, value, contributor: self.frame_id });
+        Ok(())
+    }
+
+    pub fn read<V: DeserializeOwned>(&self, name: impl Into<ChannelName>) -> crate::Result<V> {
+        let name = name.into();
+
+        let value = self.updates.iter().rev()
+            .find(|update| update.name == name)
+            .map(|update| &update.value)
+            .cloned()
+            .or_else(|| self.channels.get(&name))
+            .ok_or_else(|| crate::err!("no channel {name} exists"))?;
+
+        let value = serde_json::from_value(value)?;
+        Ok(value)
+    }
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Channels(HashMap<ChannelName, Value>);
+
+impl Channels {
+    pub fn get<Q: ?Sized>(&self, name: &Q) -> Option<Value>
+        where ChannelName: Borrow<Q>,
+                Q: std::hash::Hash + std::cmp::Eq
+    {
+        self.0.get(name).cloned()
+    }
+
+    pub fn write(&mut self, name: impl Into<ChannelName>, value: impl Serialize) {
+        let name = name.into();
+        let value = serde_json::to_value(value).unwrap();
+        self.0.insert(name, value);
+    }
+
+    pub fn extend(&mut self, value: impl IntoIterator<Item=(ChannelName, Value)>) {
+        self.0.extend(value)
+    }
+}
 
 impl FromIterator<(ChannelName, Value)> for Channels {
     fn from_iter<T: IntoIterator<Item = (ChannelName, Value)>>(iter: T) -> Self {

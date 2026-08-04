@@ -7,7 +7,7 @@ use crate::hitl::HitlId;
 use crate::session::SessionId;
 use crate::session::store::InMemorySessionStore;
 
-use super::super::{FrameData, FrameId, FrameNode};
+use super::super::{FrameKind, FrameId, FrameNode};
 use super::StoreSessionFrame;
 
 /// Erreur renvoyée par [`InMemorySessionFrameStore`] — seul cas où
@@ -86,7 +86,7 @@ impl StoreSessionFrame for InMemorySessionFrameStore {
             .get_mut(&(*id, *frame_id))
             .ok_or(InMemorySessionFrameStoreError::FrameNotFound(*id, *frame_id))?;
 
-        frame.data = FrameData::Hitl(*hitl_id);
+        frame.data = FrameKind::Hitl(*hitl_id);
 
         Ok(())
     }
@@ -101,7 +101,7 @@ impl StoreSessionFrame for InMemorySessionFrameStore {
             .frames
             .lock()
             .values()
-            .find(|frame| frame.session_id == *id && frame.data == FrameData::Hitl(hitl_id))
+            .find(|frame| frame.session_id == *id && frame.data == FrameKind::Hitl(hitl_id))
             .map(|frame| frame.id))
     }
 

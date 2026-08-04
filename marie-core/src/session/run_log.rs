@@ -15,8 +15,8 @@ pub enum RunLogContent {
     /// Un seul appel `ask_experts!` peut demander plusieurs experts en une
     /// fois (fan-out sous un même `ExpertAggregator`) — un seul `RunLog` par
     /// appel, pas un par requête.
-    AskExpertLog { requests: Vec<RequestAskExpert> },
-    ToolCallLog { requests: Vec<RequestToolCall> },
+    ConsultExpertsLog { requests: Vec<RequestAskExpert> },
+    CallToolsLog { requests: Vec<RequestToolCall> },
     /// `graph_id` : identifiant demandé par `FrameResult::ExecuteGraph`,
     /// avant résolution en `GraphRef` par `SessionHandler::append_graph`.
     GraphLog { graph_id: GraphId },

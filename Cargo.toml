@@ -9,7 +9,7 @@ members = [
     "marie-web-example",
     "marie-gateway",
     "marie-ws"
-, "marie-macros"]
+, "marie-macros", "marie-cli"]
 
 [workspace.dependencies]
 serde = "1.0.228"
@@ -30,3 +30,5 @@ jsonschema = "0.48.5"
 moka = "0.12.15"
 chrono = "0.4.45"
 rune = "0.14.2"
+rustyline = "14.0"
+strum = "0.28.0"

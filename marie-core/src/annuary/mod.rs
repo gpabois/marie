@@ -178,8 +178,9 @@ impl Annuary {
     }
 }
 
+#[cfg(feature = "rpc-executor")]
 impl<C> Constructible<C> for Annuary
-     where C: Get<Capabilities> 
+     where C: Get<Capabilities>
                 + Get<AnnuaryEventRouter>
                 + Resolve<RpcClient>
                 + Resolve<RpcServer>
@@ -187,9 +188,25 @@ impl<C> Constructible<C> for Annuary
 {
     fn construct(container: &C, _: ()) -> Self {
         Self::new(
-            container.get(), 
+            container.get(),
             container.get(),
             container.resolve(()),
+            container.resolve(())
+        )
+    }
+}
+
+#[cfg(not(feature = "rpc-executor"))]
+impl<C> Constructible<C> for Annuary
+     where C: Get<Capabilities>
+                + Get<AnnuaryEventRouter>
+                + Resolve<RpcClient>
+
+{
+    fn construct(container: &C, _: ()) -> Self {
+        Self::new(
+            container.get(),
+            container.get(),
             container.resolve(())
         )
     }

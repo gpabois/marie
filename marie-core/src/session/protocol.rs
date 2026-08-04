@@ -4,11 +4,11 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{
-    events::Event, expert::RequestAskExpert, graph::{GraphId, NodeId}, hitl::{Hitl, protocol::{HitlRequest, HitlResponse}}, job::JobState, session::{SessionId, channel::{ChannelName, ChannelUpdate}, frames::FrameId, logs::SessionLog, run_log::RunLog}, shell::ShellMode, tools::RequestToolCall
+    events::Event, expert::RequestAskExpert, graph::{GraphId, NodeId}, hitl::{Hitl, protocol::{HitlRequest, HitlResponse}}, job::JobState, session::{SessionId, SessionStatus, channel::{ChannelName, ChannelUpdate}, frames::FrameId, logs::SessionLog, run_log::RunLog}, shell::ShellMode, tools::RequestToolCall
 };
 
 #[derive(Clone, Deserialize, Serialize)]
-pub enum CreateSessionArgs {
+pub enum NewSessionArgs {
     Shell(ShellMode),
     Graph {
         graph_id: GraphId,
@@ -35,9 +35,9 @@ pub enum FrameResult {
     // --- Commandes HITL ------ //
     RequestHitl(Hitl),
     /// Demande l'avis d'experts
-    AskExperts(Vec<RequestAskExpert>),
+    ConsultExperts(Vec<RequestAskExpert>),
     /// Demande l'exécution d'outils
-    RequestToolsCalls(Vec<RequestToolCall>),
+    CallTools(Vec<RequestToolCall>),
     // --- Commandes de graphe ------ //
     ExecuteGraph(GraphId),
     /// Va au prochain noeud
@@ -64,7 +64,14 @@ pub enum SessionEvent {
     HitlAnswered(HitlResponse),
     HitlRequested(HitlRequest),
     LogCreated(SessionLog),
-    LogUpdated(SessionLog)
+    LogUpdated(SessionLog),
+    /// Émis à chaque écriture de [`SessionStatus`] (voir
+    /// [`crate::session::checkpointer::SessionCheckpointer::fail`], seul
+    /// site d'écriture existant à ce jour) — permet à un consommateur
+    /// attaché à une session (voir [`crate::session::client::SessionClient`])
+    /// de savoir qu'elle est terminée sans avoir à re-sonder
+    /// [`crate::session::dto::SessionView::status`].
+    SessionStatusUpdated(SessionId, SessionStatus)
 }
 
 impl SessionEvent {
@@ -74,6 +81,7 @@ impl SessionEvent {
             SessionEvent::LogCreated(session_log) => session_log.session_id,
             SessionEvent::LogUpdated(session_lod) => session_lod.session_id,
             SessionEvent::HitlAnswered(hitl_response) => hitl_response.session_id,
+            SessionEvent::SessionStatusUpdated(session_id, _) => *session_id,
         }
     }
 }
@@ -93,6 +101,7 @@ impl Event for SessionEvent {
             SessionEvent::LogCreated(session_log) => session_log.id.to_string(),
             SessionEvent::LogUpdated(session_log) => session_log.id.to_string(),
             SessionEvent::HitlAnswered(hitl_response) => hitl_response.session_id.to_string(),
+            SessionEvent::SessionStatusUpdated(session_id, _) => session_id.to_string(),
         }
     }
 
@@ -107,6 +116,10 @@ impl Event for SessionEvent {
 pub(crate) enum SessionCheckpointEvent {
     SessionCreated {
         session_id: SessionId
+    },
+    HitlAnswered {
+        session_id: SessionId,
+        response: HitlResponse
     },
     /// Un frame vient d'être créé, voir [`SessionHandler::on_frame_created`].
     FrameCreated {
@@ -142,5 +155,20 @@ pub(crate) enum SessionCheckpointEvent {
     FrameTerminated {
         session_id: SessionId,
         frame_id: FrameId
+    }
+}
+
+impl SessionCheckpointEvent {
+    pub fn session_id(&self) -> SessionId {
+        match self {
+            SessionCheckpointEvent::SessionCreated { session_id } => *session_id,
+            SessionCheckpointEvent::HitlAnswered { session_id, response } => *session_id,
+            SessionCheckpointEvent::FrameCreated { session_id, frame_id } => *session_id,
+            SessionCheckpointEvent::FrameRunJobStateUpdate { session_id, frame_id, job_state } => *session_id,
+            SessionCheckpointEvent::FrameReady { session_id, frame_id } => *session_id,
+            SessionCheckpointEvent::FrameRunTerminated { session_id, frame_id } => *session_id,
+            SessionCheckpointEvent::ChildFrameTerminated { session_id, parent_id, child_id } => *session_id,
+            SessionCheckpointEvent::FrameTerminated { session_id, frame_id } => *session_id,
+        }
     }
 }

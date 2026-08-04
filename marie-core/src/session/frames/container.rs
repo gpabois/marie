@@ -8,7 +8,8 @@ use super::{FrameId, FrameNode};
 pub struct FrameNodeContainer {
     pub store: SessionFrameStore,
     pub node: FrameNode,
-    pub dirty: bool
+    pub dirty: bool,
+    pub deleted: bool
 }
 
 impl FrameNodeContainer {
@@ -20,7 +21,7 @@ impl FrameNodeContainer {
     pub async fn new(store: SessionFrameStore, session_id: SessionId, frame_id: FrameId) -> crate::Result<Self> {
         let node = store.get_frame(&session_id, &frame_id).await?;
 
-        Ok(Self { store, node, dirty: false })
+        Ok(Self { store, node, dirty: false, deleted: false })
     }
 
     /// Enveloppe un [`FrameNode`] fraîchement créé en mémoire, pas encore
@@ -28,7 +29,7 @@ impl FrameNodeContainer {
     /// pour qu'il soit écrit au premier [`Self::flush`]/à son éviction du
     /// cache, contrairement à [`Self::new`] qui charge un noeud déjà en base.
     pub(super) fn from_new_node(store: SessionFrameStore, node: FrameNode) -> Self {
-        Self { store, node, dirty: true }
+        Self { store, node, dirty: true, deleted: false }
     }
 
     /// Persiste `node` si `dirty` est levé, puis rabaisse le drapeau —

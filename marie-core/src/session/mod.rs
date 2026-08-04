@@ -10,9 +10,8 @@ pub mod snapshot;
 pub mod channel;
 pub mod spec;
 pub mod run_log;
-mod hitls;
 pub mod rpc;
-mod client;
+pub mod client;
 pub mod dto;
 pub mod checkpointer;
 

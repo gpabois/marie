@@ -53,12 +53,12 @@ pub trait StoreHitl {
 pub struct HitlStore(Arc<dyn StoreHitl + Send + Sync + 'static>);
 
 impl HitlStore {
-    pub fn new(store: Arc<dyn StoreHitl + Send + Sync + 'static>) -> Self {
-        Self(store)
+    pub fn new(store: impl StoreHitl + Send + Sync + 'static) -> Self {
+        Self(Arc::new(store))
     }
 
     pub fn in_memory() -> Self {
-        Self::new(Arc::new(InMemoryHitlStore::new()))
+        Self::new(InMemoryHitlStore::new())
     }
 }
 

@@ -3,14 +3,12 @@ use std::{
     sync::Arc,
 };
 
-use moka::future::Cache;
-use parking_lot::Mutex;
 use std::collections::HashMap;
 use thiserror::Error;
 use typed_builder::TypedBuilder;
 
 use crate::{
-    di::{Constructible, Get, Resolve}, events::EventBus, hitl::{Answer, Hitl, HitlFrame, HitlId, protocol::{HitlRequest, HitlResponse}, store::HitlStore}, id::IdGenerator, session::{SessionId, protocol::SessionEvent}
+    di::{Constructible, Get, Resolve}, events::EventBus, hitl::{Answer, Hitl, HitlFrame, HitlId, model::{Answers, validate_answers}, protocol::{HitlRequest, HitlResponse}, store::HitlStore}, id::IdGenerator, session::{SessionId, protocol::SessionEvent}
 };
 
 /// Erreur qu'une opération de [`SessionHitls`]/[`HitlContainer`] peut
@@ -23,8 +21,11 @@ use crate::{
 pub enum HitlError {
     #[error("erreur lors des opérations de stockage: {0}")]
     StorageError(crate::Error),
+    #[error("erreur de validation: {0}")]
+    ValidationError(String),
 }
 
+#[derive(Clone)]
 pub struct SessionHitlsFactory(Arc<dyn Fn(SessionId) -> SessionHitls + Send + Sync + 'static>);
 
 impl SessionHitlsFactory {
@@ -78,12 +79,12 @@ pub struct SessionHitlsArgs {
 /// SessionController::events`]) est la même poignée que celle propagée à
 /// [`crate::session::controller::SessionHandler`] — elle transitera par ici
 /// pour notifier les abonnés d'une requête créée ou répondue.
+#[derive(Clone)]
 pub struct SessionHitls {
     id: IdGenerator,
     store: HitlStore,
     events: EventBus,
-    session_id: SessionId,
-    hitls: Cache<HitlId, Arc<Mutex<HitlContainer>>>
+    session_id: SessionId
 }
 
 impl SessionHitls {
@@ -93,7 +94,6 @@ impl SessionHitls {
             events: args.events,
             session_id: args.session_id,
             id: args.id,
-            hitls: Cache::builder().build()
         }
     }
 
@@ -103,11 +103,12 @@ impl SessionHitls {
             .await
             .map_err(HitlError::StorageError)?;
 
-        if let Some(container) = self.hitls.get(&id).await {
-            let mut container = container.lock();
-            container.hitl.answer = Some(answers.clone());
-            container.dirty = true;
-        }
+        let hitl = self.store.get_hitl(&self.session_id, &id).await.map_err(HitlError::StorageError)?;
+
+        let answers = match hitl {
+            Hitl::Questions(questions) => validate_answers(&questions, answers)?,
+            Hitl::Text => Answers::from(answers)
+        };
 
         let response = HitlResponse {
             session_id: self.session_id,
@@ -135,10 +136,8 @@ impl SessionHitls {
             id,
             hitl,
         };
-
-        let mut container = HitlContainer::from_hitl(self.store.clone(), frame);
-        container.flush().await.map_err(HitlError::StorageError)?;
-        self.hitls.insert(id, Arc::new(Mutex::new(container))).await;
+        
+        self.store.upsert_hitl_frame(frame).await.map_err(HitlError::StorageError)?;
         self.events.emit(SessionEvent::HitlRequested(request));
 
         Ok(id)

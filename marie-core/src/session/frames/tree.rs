@@ -6,7 +6,7 @@ use serde::Serialize;
 use serde_json::Value;
 use typed_builder::TypedBuilder;
 
-use crate::{di::{Constructible, Factory, Get, Resolve}, graph::Graphs, hitl::HitlId, session::{SessionId, controller::SessionError, frames::{FrameId, store::SessionFrameStore}, spec::CommonSpec}};
+use crate::{di::{Constructible, Factory, Get, Resolve}, graph::Graphs, hitl::HitlId, session::{SessionId, controller::SessionError, frames::{FrameId, ResumePolicy, policy::{OnResumePolicy, ReducePolicy}, store::SessionFrameStore}, spec::CommonSpec}};
 
 use crate::session::run_log::RunLog;
 
@@ -15,7 +15,7 @@ use super::{
     FrameNodeContainer, 
     FrameSpecRef, 
     FrameStatus, 
-    FrameData, 
+    FrameKind, 
     FramePolicy
 };
 
@@ -47,6 +47,7 @@ pub struct FrameTreeArgs {
     graphs: Graphs
 }
 
+#[derive(Clone)]
 pub struct FrameTree {
     pub store: SessionFrameStore,
     pub session_id: SessionId,
@@ -167,12 +168,40 @@ impl FrameTree {
         self.get(id).await.lock().status.clone()
     }
 
-    pub async fn data_of(&self, id: &FrameId) -> FrameData {
+    pub async fn data_of(&self, id: &FrameId) -> FrameKind {
         self.get(id).await.lock().data.clone()
     }
 
     pub async fn policy_of(&self, id: &FrameId) -> FramePolicy {
         self.get(id).await.lock().frame_policy.clone()
+    }
+
+    pub async fn set_policy_of(&self, id: &FrameId, policy: FramePolicy) {
+        self.get(id).await.lock().frame_policy = policy;
+    } 
+
+    pub async fn set_resume_policy(&self, id: &FrameId, resume_policy: ResumePolicy) {
+        let mut policy = self.policy_of(id).await;
+        policy.resume_policy = resume_policy;
+        self.set_policy_of(id, policy);
+    }
+
+
+    pub async fn set_on_resume_policy(&self, id: &FrameId, on_resume_policy: OnResumePolicy) {
+        let mut policy = self.policy_of(id).await;
+        policy.on_resume_policy = on_resume_policy;
+        self.set_policy_of(id, policy);       
+    }
+
+    pub async fn on_resume_policy(&self, id: &FrameId) -> OnResumePolicy {
+        let policy = self.policy_of(id).await;
+        policy.on_resume_policy.clone()
+    }
+
+    pub async fn set_reduce_policy(&self, id: &FrameId, reduce_policy: ReducePolicy) {
+        let mut policy = self.policy_of(id).await;
+        policy.reduce_policy = reduce_policy;
+        self.set_policy_of(id, policy);       
     }
 
     pub async fn logs_of(&self, id: &FrameId) -> Vec<RunLog> {

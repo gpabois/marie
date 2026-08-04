@@ -1,17 +1,21 @@
 use std::sync::Arc;
-use futures::TryFutureExt ;
+use futures::{FutureExt, TryFutureExt} ;
 use moka::future::{Cache, CacheBuilder};
-use std::collections::HashMap;
+
 use thiserror::Error;
 use tokio::{select, sync::mpsc};
 use tokio_stream::StreamExt;
 use typed_builder::TypedBuilder;
 
 use crate::{
-    catalog::CatalogError, di::{Constructible, Get, Resolve}, events::EventBus, expert::{ExpertAskId, RequestAskExpert}, graph::{GraphId, GraphRef, Graphs, NodeId}, hitl::{Answer, HitlFrame, HitlId, HitlRequest, model::Answers, protocol::HitlResponse, service::HitlError}, id::generate_id, job::JobState, rpc::{RemoteProcedureCall as _, RpcServer}, session::{channel::{ChannelName, ChannelUpdate, Reducer}, checkpointer::{SessionCheckpointer, SessionCheckpointerFactory}, frames::{FrameData, FrameId, FramePolicy, FrameSpecRef::{self, Hitl}, FrameStatus, FrameTree, NewFrameNodeArgs, ParentPolicy}, hitls::Hitls, logs::SessionsLogs, protocol::{Branch, CreateSessionArgs, FrameResponse, SessionCheckpointEvent, SessionEvent}, rpc, run_log::RunLogContent, snapshot::{SessionSnapshots, Snapshot, SnapshotRef}, store::SessionStore, worker::{RunFrame, RunFrameArgs}}, tools::{RequestToolCall, ToolCallId}, worker::{WorkerClient, WorkerError}
+    catalog::CatalogError, di::{Constructible, Get, Resolve}, events::{Event as _, EventBus}, graph::GraphId, hitl::{protocol::HitlResponse, service::HitlError}, id::IdGenerator, session::{checkpointer::{SessionCheckpointer, SessionCheckpointerFactory},
+    protocol::{NewSessionArgs, SessionCheckpointEvent, SessionEvent}, rpc, store::SessionStore}, worker::WorkerError
 };
 
-use super::{Session, SessionId, SessionStatus};
+#[cfg(feature = "rpc-executor")]
+use crate::rpc::{RemoteProcedureCall as _, RpcServer};
+
+use super::{Session, SessionId};
 
 /// Erreur qu'un gestionnaire `on_*` de [`SessionHandler`] peut renvoyer —
 /// point de sortie unique qui déclenche [`SessionHandler::fail`] (voir les
@@ -72,6 +76,8 @@ pub struct SessionControllerArgs {
     store: SessionStore,
     events: EventBus,
     session_ckp_factory: SessionCheckpointerFactory,
+    id: IdGenerator,
+    #[cfg(feature = "rpc-executor")]
     rpc: RpcServer,
 }
 
@@ -79,16 +85,19 @@ pub struct SessionControllerArgs {
 pub struct SessionController {
     store: SessionStore,
     events: EventBus,
+    id: IdGenerator,
     session_ckp_factory: SessionCheckpointerFactory,
     sessions: Cache<SessionId, Arc<SessionCheckpointer>>,
     queue: mpsc::UnboundedSender<SessionCheckpointEvent>
 }
 
-impl<C> Constructible<C> for SessionController 
-    where C: Get<SessionStore> 
+#[cfg(feature = "rpc-executor")]
+impl<C> Constructible<C> for SessionController
+    where C: Get<SessionStore>
             + Resolve<EventBus>
             + Resolve<RpcServer>
             + Resolve<SessionCheckpointerFactory>
+            + Resolve<IdGenerator>
 {
     fn construct(container: &C, _: ()) -> Self {
         let args = SessionControllerArgs::builder()
@@ -96,6 +105,26 @@ impl<C> Constructible<C> for SessionController
             .session_ckp_factory(container.resolve(()))
             .rpc(container.resolve(()))
             .events(container.resolve(()))
+            .id(container.resolve(()))
+            .build();
+
+        Self::new(args)
+    }
+}
+
+#[cfg(not(feature = "rpc-executor"))]
+impl<C> Constructible<C> for SessionController
+    where C: Get<SessionStore>
+            + Resolve<EventBus>
+            + Resolve<SessionCheckpointerFactory>
+            + Resolve<IdGenerator>
+{
+    fn construct(container: &C, _: ()) -> Self {
+        let args = SessionControllerArgs::builder()
+            .store(container.get())
+            .session_ckp_factory(container.resolve(()))
+            .events(container.resolve(()))
+            .id(container.resolve(()))
             .build();
 
         Self::new(args)
@@ -127,10 +156,15 @@ impl SessionController {
     /// // même boucle de traitement démarrée par cet appel à `new`.
     /// let handle = controller.clone();
     /// ```
-    pub fn new(mut args: SessionControllerArgs) -> Self {
+    pub fn new(args: SessionControllerArgs) -> Self {
         let (queue_tx, queue_rx) = mpsc::unbounded_channel();
 
         let sessions = CacheBuilder::new(300)
+            .async_eviction_listener(|_: Arc<SessionId>, session: Arc<SessionCheckpointer>, cause: moka::notification::RemovalCause| async move {
+                session
+                .close()
+                .await;
+            }.boxed())
             .build();
 
         let controller = Self {
@@ -138,28 +172,55 @@ impl SessionController {
             sessions,
             session_ckp_factory: args.session_ckp_factory,
             events: args.events,
+            id: args.id,
             queue: queue_tx,
         };
 
-        rpc::CreateSession::new(controller.clone()).register(&mut args.rpc);
+        #[cfg(feature = "rpc-executor")]
+        {
+            let mut rpc = args.rpc;
+            rpc::CreateSession::new(controller.clone()).register(&mut rpc);
+            rpc::ReplyHitl::new(controller.clone()).register(&mut rpc);
+        }
 
         tokio::spawn(controller.clone().run(queue_rx));
 
         controller
     }
 
-    pub async fn create_session(&self, args: CreateSessionArgs) -> Result<SessionId, SessionError> {
-        let session_id = SessionId::new(generate_id());
-        let session = Session::new(session_id);
-        
+    pub async fn reply_hitl(&self, response: HitlResponse) -> Result<(), SessionError> {
+        let _ = self.queue.send(SessionCheckpointEvent::HitlAnswered{session_id: response.session_id, response});
+        Ok(())
+    }
 
+    pub async fn create_session(&self, args: NewSessionArgs) -> Result<SessionId, SessionError> {
+        let id: SessionId = self.id.next();
 
-        match args {
-            CreateSessionArgs::Shell(shell_mode) => {
-                
-            },
-            CreateSessionArgs::Graph { graph_id, initial } => todo!(),
-        }
+        let session = Session::new(id);
+        let ckp = self.session_ckp_factory.create((session, self.queue.clone()));
+        ckp.initialise_as_new(args).await?;
+
+        Ok(id)
+    }
+
+    /// Toutes les sessions connues (voir [`StoreSession::list_sessions`]) —
+    /// lecture directe du store, sans passer par [`Self::get`]/le cache
+    /// `self.sessions` : un consommateur de gestion (ex. `list sessions` du
+    /// CLI) veut l'état persisté de toutes les sessions, pas seulement
+    /// celles actuellement chargées en mémoire.
+    pub async fn list_sessions(&self) -> Result<Vec<Session>, SessionError> {
+        self.store.list_sessions().await.map_err(|err| SessionError::StorageError(Arc::new(err)))
+    }
+
+    /// Supprime `id` — invalide d'abord le [`SessionCheckpointer`] éventuellement
+    /// encore chargé en mémoire (sans quoi l'éviction du cache le
+    /// persisterait de nouveau dans le store après coup, voir
+    /// l'`eviction_listener` branché dans [`Self::new`]), puis supprime la
+    /// ligne persistée via [`StoreSession::delete_session`].
+    pub async fn delete_session(&self, id: SessionId) -> Result<(), SessionError> {
+        self.sessions.invalidate(&id).await;
+        self.store.delete_session(&id).await.map_err(|err| SessionError::StorageError(Arc::new(err)))?;
+        Ok(())
     }
 
     /// Boucle de traitement principale, spawnée une seule fois par
@@ -179,7 +240,7 @@ impl SessionController {
     /// // canal) sera consommé par cette boucle et traité par
     /// // `process_message`.
     /// ```
-    async fn run(mut self, mut queue: mpsc::UnboundedReceiver<SessionCheckpointEvent>) {
+    async fn run(self, mut queue: mpsc::UnboundedReceiver<SessionCheckpointEvent>) {
         let mut sessions_events_stream = self.events.stream_events::<SessionEvent>(SessionEvent::TOPIC);
         loop {
             select! {
@@ -193,163 +254,18 @@ impl SessionController {
 
     async fn process_session_event(&self, event: SessionEvent) {
         match event {
-            SessionEvent::HitlAnswered(HitlResponse { session_id, id, answers }) 
-                => self.on_hitl_response(session_id, hitl_id, answers),
+            SessionEvent::HitlAnswered(response) 
+                => {
+                    let ckp_event = SessionCheckpointEvent::HitlAnswered { session_id: response.session_id, response };
+                    self.process_checkpoint_event(ckp_event).await
+            },
+            _ => {}
         }
     }
 
-    /// Traite un [`Message`] unique — le point d'entrée de la machine à
-    /// états de `SessionController` : chaque variante correspond à une
-    /// étape du cycle de vie d'un frame (création, agrégation des enfants,
-    /// déclenchement d'un run, suivi de son état, terminaison), et
-    /// `process_message` elle-même n'est qu'un aiguillage vers la méthode
-    /// `handle_*`/`mark_*` correspondante (documentées individuellement
-    /// ci-dessous). C'est cette méthode déléguée, pas `process_message`,
-    /// qui peut ré-émettre un nouveau `Message` sur `self.queue` pour
-    /// enchaîner l'étape suivante plutôt que d'appeler directement l'étape
-    /// suivante — ce qui garde chaque étape atomique vis-à-vis de la boucle
-    /// [`Self::run`] et évite les races entre deux traitements concurrents
-    /// du même frame.
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// // Émis en interne (ex: depuis une méthode `handle_*`), jamais
-    /// // appelé directement par du code hors de ce module.
-    /// self.process_message(Message::FrameTerminated { session_id, frame_id }).await;
-    /// ```
-    async fn process_checkpoint_event(&mut self, msg: SessionCheckpointEvent) {
-        use SessionCheckpointEvent::{FrameCreated, ChildFrameTerminated, FrameTerminated, FrameReady, FrameRunJobStateUpdate, FrameRunTerminated};
-
-        match msg {
-            FrameCreated { session_id, frame_id } 
-                => self.on_frame_created(session_id, frame_id).await,
-            // Une frame a terminé (done ou failed)
-            // 1. On vérifie si une frame parent attend que ses enfants aient terminés
-            // 2. Si tous les enfants ont terminés, on va envoyer un message-évènement `AllChildrenFrameHaveTerminated`
-            FrameTerminated { session_id, frame_id } 
-                => self.on_frame_terminated(session_id, frame_id).await,
-            // On va déclencher un run
-            FrameReady { session_id, frame_id } 
-                => self.on_frame_ready(session_id, frame_id).await,
-            // On a terminé un run
-            FrameRunJobStateUpdate { session_id, frame_id, job_state}
-                => self.on_frame_run_update(session_id, frame_id, job_state).await,
-            FrameRunTerminated { session_id, frame_id } 
-                => self.on_frame_terminated(session_id, frame_id).await,
-            ChildFrameTerminated { session_id, parent_id, child_id } 
-                => self.on_child_frame_terminated(session_id, parent_id, child_id).await
-        }
-    }
-
-    async fn on_hitl_response(&self, session_id: SessionId, hitl_id: HitlId, answers: Answers) {
-        let Ok(handler) = self.get(&session_id).await else { return };
-        if let Err(err) = handler.on_hitl_response(&hitl_id, answers).await {
-            handler.fail(err).await;
-        }       
-    }
-
-    async fn on_child_frame_terminated(&self, session_id: SessionId, parent_id: FrameId, child_id: FrameId) {
-        let Ok(handler) = self.get(&session_id).await else { return };
-        if let Err(err) = handler.on_child_frame_terminated(&parent_id, &child_id).await {
-            handler.fail(err).await;
-        }
-    }
-
-    /// Réagit à [`Message::FrameCreated`] : un frame tout juste créé (voir
-    /// [`Self::append_frame`]) est immédiatement prêt à tourner, puisqu'il
-    /// n'a par construction aucun enfant à attendre — délègue donc
-    /// directement à [`Self::mark_frame_as_ready`].
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// self.handle_created_frame(session_id, frame_id).await;
-    /// ```
-    async fn on_frame_created(&self, session_id: SessionId, frame_id: FrameId) {
-        let Ok(handler) = self.get(&session_id).await else { return };
-        if let Err(err) = handler.on_frame_created(&frame_id).await {
-            handler.fail(err).await;
-        }
-    }
-
-    /// Réagit à [`Message::FrameRunTerminated`] : relit le statut que
-    /// [`Self::handle_frame_run_update`] vient d'écrire et le fait
-    /// progresser — un échec devient [`FrameStatus::Failed`] puis pousse
-    /// [`Message::FrameTerminated`] (voir [`Self::handle_terminated_frame`]),
-    /// une complétion délègue à [`Self::handle_frame_run_completion`] pour
-    /// interpréter la [`FrameResponse`] produite par le run.
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// self.handle_terminated_frame_run(session_id, frame_id).await;
-    /// ```
-    async fn on_frame_run_terminated(&self, session_id: SessionId, frame_id: FrameId) {
-        let Ok(session) = self.get(&session_id).await else { return };
-        if let Err(err) = session.on_frame_run_terminated(&frame_id).await {
-            session.fail(err).await;
-        }
-    }
-
-    /// Réagit à [`Message::FrameRunJobStateUpdate`] : traduit le
-    /// [`JobState`] brut renvoyé par le worker (voir [`Self::run_frame`])
-    /// en [`FrameStatus::RunCompleted`]/[`FrameStatus::RunFailed`], puis
-    /// pousse [`Message::FrameRunTerminated`] pour que
-    /// [`Self::handle_terminated_frame_run`] prenne le relais — les autres
-    /// variantes de [`JobState`] (mises à jour intermédiaires, sans
-    /// équivalent en [`FrameStatus`]) sont ignorées.
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// self.handle_frame_run_update(session_id, frame_id, job_state).await;
-    /// ```
-    async fn on_frame_run_update(&self, session_id: SessionId, frame_id: FrameId, job_state: JobState<FrameResponse>) {
-        let Ok(session) = self.get(&session_id).await else { return };
-        if let Err(err) = session.on_frame_run_update(&frame_id, job_state).await {
-            session.fail(err).await;
-        }
-    }
-
-    /// Réagit à [`Message::FrameReady`] en spawnant [`Self::run_frame`] sur
-    /// sa propre tâche tokio plutôt que de l'attendre ici — un run peut
-    /// durer arbitrairement longtemps (appel modèle, tool, etc.) et ne doit
-    /// pas bloquer la boucle [`Self::run`] pendant ce temps, qui doit
-    /// rester libre de traiter les autres frames/sessions en attente. Seule
-    /// méthode `handle_*`/`mark_*` non `async` : elle ne fait qu'initier le
-    /// spawn, sans rien attendre elle-même.
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// self.handle_ready_frame(session_id, frame_id);
-    /// ```
-    async fn on_frame_ready(&self, session_id: SessionId, frame_id: FrameId) {
-        let Ok(session) = self.get(&session_id).await else { return };
-        if let Err(err) = session.on_frame_ready(&frame_id).await {
-            session.fail(err).await;
-        }
-    }
-
-    /// Réagit à [`Message::FrameTerminated`]/[`Message::FrameRunTerminated`] :
-    /// si `frame_id` a un parent et que tous les enfants de ce dernier ont
-    /// désormais atteint un statut terminal (voir [`all_have_terminated`]),
-    /// pousse [`Message::AllChildrenFrameHaveTerminated`] pour que
-    /// [`Self::handle_all_terminated_children`] prenne le relais — ne fait
-    /// rien si `frame_id` est la racine (pas de parent à débloquer) ou si
-    /// d'autres enfants sont encore en cours.
-    ///
-    /// # Exemple
-    ///
-    /// ```ignore
-    /// self.handle_terminated_frame(session_id, frame_id).await;
-    /// ```
-    async fn on_frame_terminated(&self, session_id: SessionId, frame_id: FrameId) {
-        let Ok(handler) = self.get(&session_id).await else { return };
-        if let Err(err) = handler.on_frame_terminated(&frame_id).await {
-            handler.fail(err).await;
-        }
+    async fn process_checkpoint_event(&self, event: SessionCheckpointEvent) {
+        let Ok(handler) = self.get(&event.session_id()).await else { return };
+        handler.send_ckp_event(event);
     }
 
 
@@ -374,28 +290,17 @@ impl SessionController {
     async fn get(&self, id: &SessionId) -> Result<Arc<SessionCheckpointer>, SessionError> {
         let result = self
             .sessions
-            .try_get_with(*id, SessionCheckpointer::load(*id, self.clone()))
+            .try_get_with(*id, self.instantiate_session_ckp(id))
             .map_err(|err| SessionError::StorageError(err))
             .await?;
 
         Ok(result)
     }
 
-    fn instantiate_session_handler(&self, session: Session) -> SessionCheckpointer {
-        let handler = SessionCheckpointer::load(*id, self.clone());
+    async fn instantiate_session_ckp(&self, id: &SessionId) -> crate::Result<Arc<SessionCheckpointer>> {
+        let session = self.store.get_session(id).await?;
+        let ckp = self.session_ckp_factory.create((session, self.queue.clone()));
+        Ok(Arc::new(ckp))
     }
 
-    /// Journal de `session_id` — accès direct, sans passer par
-    /// [`Self::get`]/[`SessionHandler`] : contrairement à [`FrameTree`]/
-    /// [`Snapshots`]/[`Hitls`], [`SessionsLogs`] ne porte aucun cache à
-    /// partager entre appelants, donc pas besoin de faire charger tout
-    /// l'état d'une session (frames, clichés) juste pour y écrire une
-    /// entrée de journal.
-    pub fn logs(&self) -> SessionsLogs {
-        SessionsLogs::new(self.store.clone(), self.events.clone())
-    }
-
-    fn emit(&self, msg: Message) {
-        let _ =self.queue.send(msg);
-    }
 }

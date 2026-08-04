@@ -78,10 +78,10 @@ impl FromStr for ID {
     }
 }
 
-impl<C> Constructible<C, chrono::DateTime<Utc>> for IdGenerator 
+impl<C> Constructible<C> for IdGenerator 
     where C: Get<OwnNodeId>
 {
-    fn construct(container: &C, args: chrono::DateTime<Utc>) -> Self {
+    fn construct(container: &C, _: ()) -> Self {
         let mut hasher = Sha256::new();
         let own: OwnNodeId = container.get();
         hasher.update(own.as_ref());

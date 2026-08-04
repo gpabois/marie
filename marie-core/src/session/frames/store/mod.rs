@@ -56,12 +56,12 @@ pub trait StoreSessionFrame {
 pub struct SessionFrameStore(Arc<dyn StoreSessionFrame + Send + Sync + 'static>);
 
 impl SessionFrameStore {
-    pub fn new(store: Arc<dyn StoreSessionFrame + Send + Sync + 'static>) -> Self {
-        Self(store)
+    pub fn new(store: impl StoreSessionFrame + Send + Sync + 'static) -> Self {
+        Self(Arc::new(store))
     }
 
     pub fn in_memory() -> Self {
-        Self::new(Arc::new(InMemorySessionFrameStore::new()))
+        Self::new(InMemorySessionFrameStore::new())
     }
 }
 

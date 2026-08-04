@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 #[repr(u8)]
 pub enum Capability {
     Gateway = 0b01,
-    Orchestrator = 0b10,
+    SessionOrchestrator = 0b10,
     Worker = 0b100,
     State = 0b1000,
     /// Le nœud participe au groupe Raft de [`crate::lease::authority::LeaseAuthority`]
@@ -43,7 +43,7 @@ impl Capabilities {
     }
 
     pub fn orchestrator(&self) -> bool {
-        self.0 & (&Capability::Orchestrator.into()) > 0
+        self.0 & (&Capability::SessionOrchestrator.into()) > 0
     }
 
     pub fn worker(&self) -> bool {
@@ -63,7 +63,7 @@ impl Capabilities {
     }
 
     pub fn set_orchestrator(&mut self) {
-        self.0 |= &Capability::Orchestrator.into();
+        self.0 |= &Capability::SessionOrchestrator.into();
     }
 
     pub fn set_worker(&mut self) {

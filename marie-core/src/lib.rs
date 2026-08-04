@@ -28,7 +28,10 @@ pub mod post;
 pub mod catalog;
 pub mod stream;
 pub mod script;
-pub mod client;
+pub mod entrypoint;
 pub mod shell;
+pub mod entity;
 
 pub use error::{Context, Error, Result};
+
+pub use entrypoint::{LocalMarie, LocalMarieArgs};

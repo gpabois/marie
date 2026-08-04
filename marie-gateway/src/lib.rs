@@ -7,7 +7,7 @@ use std::sync::Arc;
 use futures::future::BoxFuture;
 use futures::{Sink, SinkExt, Stream, StreamExt};
 use marie_core::{
-    client::Client,
+    entrypoint::Client,
     layer::Layer,
     events::{EventEnvelope, layers::EventLayer},
     session::{Session, SessionEvent, SessionId, client::SessionClient},

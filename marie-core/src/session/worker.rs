@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-
 use futures::{StreamExt as _, pin_mut};
 use marie_macros::core_job;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use typed_builder::TypedBuilder;
 
+#[cfg(feature="job-executor")]
+use crate::{expert::ExpertId, session::channel::ChannelsTracker};
 use crate::{
-    agent::{Context, ContextEntry, Role}, expert::Experts, graph::{Graphs, node::NodeContext}, model::{ExecuteModelArgs, Models, ModelStreamEvent}, session::{
-        SessionId, channel::{ChannelName, ChannelUpdate}, frames::{FrameData, FrameId}, protocol::{FrameResponse, FrameResult}, run_log::{RunLog, RunLogs}
+    session::channel::Channels,
+    agent::{Context, ContextEntry, Role}, expert::Experts, graph::{Graphs, node::NodeContext}, model::{ExecuteModelArgs, ModelStreamEvent, Models}, session::{
+        SessionId, channel::{ChannelName, ChannelUpdate}, frames::{FrameId, FrameKind}, protocol::{FrameResponse, FrameResult}, run_log::{RunLog, RunLogs}
     }, tools::{ToolId, Tools}
 };
 
@@ -21,17 +21,22 @@ pub struct RunFrameArgs {
     /// `session::controller::SessionHandler`) plutôt que relus ici depuis
     /// `SessionStore` : un job est une unité de calcul bornée, elle ne doit
     /// pas avoir besoin d'un accès direct au stockage pour s'exécuter.
-    channels: HashMap<ChannelName, Value>,
+    channels: Channels,
     /// Journal de rejeu déterministe du `NodeFrame` — même principe que
     /// `channels` ci-dessus (fourni par l'appelant, pas relu ici) : voir
     /// `session::run_log::RunLogs`.
     logs: Vec<RunLog>,
-    data: FrameData
+    data: FrameKind
 }
 
 core_job! {
     #[job(name="/marie/sessions/jobs/run-frame")]
     pub async fn run_frame(self: Self<{models: Models, tools: Tools, graphs: Graphs, experts: Experts}>, args: RunFrameArgs) -> FrameResponse {
+        let mut channels = ChannelsTracker::new(
+            args.frame_id,
+            args.channels
+        );
+
         match args.data {
             // Indirection vers `Models::execute` : résout l'expert puis les
             // tools qu'il a le droit d'appeler (voir `Expert::allowed_tools`),
@@ -39,7 +44,10 @@ core_job! {
             // `session::spec::CommonSpec::expert`) plutôt que dans le
             // résultat du frame — c'est ce canal, pas `FrameResult`, que lit
             // l'appelant via `FrameSpecRef::ExpertAggregator`.
-            FrameData::AskExpert { expert_id, task, .. } => {
+            FrameKind::ExpertConsultation => {
+                let expert_id: ExpertId = channels.read("expert_id")?;
+                let task: String = channels.read("expert_consultation_task")?;
+
                 let expert = match self.experts.get(&expert_id).await {
                     Ok(Some(expert)) => expert,
                     Ok(None) => {
@@ -89,30 +97,34 @@ core_job! {
 
                 while let Some(event) = stream.next().await {
                     match event {
-                        ModelStreamEvent::Completed(response) => answer = response.text,
+                        ModelStreamEvent::Completed(response) => answer = {
+                            response.text
+                        },
                         ModelStreamEvent::Failed(message) => failure = Some(message),
                         ModelStreamEvent::TextDelta(_) => {}
                     }
                 }
 
                 if let Some(error) = failure {
-                    return Ok(FrameResponse { frame_id: args.frame_id, updates: Vec::new(), new_logs: Vec::new(), result: FrameResult::Failed(error) });
+                    return Ok(FrameResponse { 
+                        frame_id: args.frame_id, 
+                        updates: channels.into_updates(), 
+                        new_logs: Vec::new(), 
+                        result: FrameResult::Failed(error) 
+                    });
                 }
 
-                let update = ChannelUpdate {
-                    name: ChannelName::from("expert_answer"),
-                    value: Value::String(answer.unwrap_or_default()),
-                    contributor: args.frame_id,
-                };
+                channels.write("expert_consultation_answer", answer);
 
-                Ok(FrameResponse { frame_id: args.frame_id, updates: vec![update], new_logs: Vec::new(), result: FrameResult::Completed })
+
+                Ok(FrameResponse { frame_id: args.frame_id, updates: channels.into_updates(), new_logs: Vec::new(), result: FrameResult::Completed })
             },
             // Indirection vers `Tools::execute` (voir aussi `Graphs::execute`
             // pour la node-executor, même principe) — le résultat est relayé
             // sur le canal `tool_result` (voir `session::spec::CommonSpec::tool`),
             // pas dans `FrameResult`, sur le même modèle que `AskExpert`
             // ci-dessus.
-            FrameData::ToolCall { name, parameters, .. } => {
+            FrameKind::ToolCall { name, parameters, .. } => {
                 let tool_id = ToolId::from(name);
 
                 match self.tools.execute(args.session_id, &tool_id, parameters).await {
@@ -134,7 +146,7 @@ core_job! {
             // ici (portée de la frame en cours), pas dans `Graphs::execute`
             // lui-même, qui ne connaît que la `NodeSpec` — `Graphs` reste
             // ainsi indépendante de la notion de session/frame.
-            FrameData::GraphNode { graph_ref, node_id } => {
+            FrameKind::GraphNode { graph_ref, node_id } => {
                 let graph = match self.graphs.get(&graph_ref).await {
                     Ok(graph) => graph,
                     Err(error) => {
@@ -147,18 +159,14 @@ core_job! {
                     return Ok(FrameResponse { frame_id: args.frame_id, updates: Vec::new(), new_logs: Vec::new(), result: FrameResult::Failed(error) });
                 };
 
-                let ctx = NodeContext::new(args.session_id, args.frame_id, args.channels, RunLogs::new(args.logs));
+                let ctx = NodeContext::new(args.session_id, args.frame_id, channels, RunLogs::new(args.logs));
 
                 let (updates, new_logs, result) = match self.graphs.execute(spec, ctx).await {
-                    Ok((ctx, result)) => (ctx.updates, ctx.logs.into_new_logs(), result),
+                    Ok((ctx, result)) => (ctx.channels.into_updates(), ctx.logs.into_new_logs(), result),
                     Err(error) => (Vec::new(), Vec::new(), FrameResult::Failed(error.to_string())),
                 };
 
                 Ok(FrameResponse { frame_id: args.frame_id, updates, new_logs, result })
-            }
-            FrameData::GraphNode { .. } => {
-                let error = "exécution de node native indisponible : feature `node-executor` non activée".to_string();
-                Ok(FrameResponse { frame_id: args.frame_id, updates: Vec::new(), new_logs: Vec::new(), result: FrameResult::Failed(error) })
             }
             _ => todo!("...")
         }

@@ -1,26 +1,26 @@
 use tokio::sync::mpsc;
 
-use crate::{di::{Constructible, Factory, Get, Resolve}, graph::Graphs, hitl::service::SessionHitlsFactory, id::IdGenerator, session::{Session, frames::FrameTreeFactory, logs::SessionLogsFactory, protocol::SessionCheckpointEvent, snapshot::SessionSnapshotsFactory, store::SessionStore}, worker::WorkerClient};
+use crate::{di::{Constructible, Factory, Get, Resolve}, events::EventBus, graph::Graphs, hitl::service::SessionHitlsFactory, id::IdGenerator, session::{Session, frames::FrameTreeFactory, logs::SessionLogsFactory, protocol::SessionCheckpointEvent, snapshot::SessionSnapshotsFactory, store::SessionStore}, worker::WorkerClient};
 
 use super::{SessionCheckpointer, SessionCheckpointerArgs};
 
 pub type SessionCheckpointerFactory = Factory<SessionCheckpointer, (Session, mpsc::UnboundedSender<SessionCheckpointEvent>)>;
 
-impl<C> Constructible<C> for SessionCheckpointerFactory 
+impl<C> Constructible<C> for SessionCheckpointerFactory
     where C: Clone + Send + Sync + 'static
             + Get<SessionStore>
             + Resolve<WorkerClient>
             + Resolve<Graphs>
-            + Resolve<SessionStore>
+            + Resolve<EventBus>
             + Resolve<SessionHitlsFactory>
             + Resolve<SessionSnapshotsFactory>
             + Resolve<SessionLogsFactory>
             + Resolve<FrameTreeFactory>
             + Resolve<IdGenerator>
 {
-    fn construct(container: &C, args: ()) -> Self {
+    fn construct(container: &C, _: ()) -> Self {
         let container = container.clone();
-        
+
         let session_hitls_factory: SessionHitlsFactory = container.resolve(());
         let session_snapshots_factory: SessionSnapshotsFactory = container.resolve(());
         let session_logs_factory: SessionLogsFactory = container.resolve(());
@@ -31,12 +31,13 @@ impl<C> Constructible<C> for SessionCheckpointerFactory
             let session_snapshots = session_snapshots_factory.create(session.id);
             let session_logs = session_logs_factory.create(session.id);
             let frame_tree = frame_tree_factory.create(session.id);
-            
+
             let args = SessionCheckpointerArgs::builder()
                 .session(session)
                 .id(container.resolve(()))
                 .queue(queue)
                 .worker(container.resolve(()))
+                .events(container.resolve(()))
                 .graphs(container.resolve(()))
                 .session_logs(session_logs)
                 .hitls(session_hitls)

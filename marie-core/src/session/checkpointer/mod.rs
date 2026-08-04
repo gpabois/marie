@@ -1,14 +1,15 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use futures::{StreamExt as _, TryStreamExt as _, stream};
 use parking_lot::Mutex;
 use serde_json::Value;
-use tokio::sync::mpsc;
+use tokio::{select, sync::{mpsc, watch}};
+use tokio_stream::wrappers::WatchStream;
 use typed_builder::TypedBuilder;
 
 use crate::{
-    expert::{ExpertAskId, RequestAskExpert}, graph::{GraphId, GraphRef, Graphs, NodeId}, hitl::{Hitl, HitlId, model::Answers, service::SessionHitls}, id::IdGenerator, job::JobState, session::{
-        Session, SessionId, SessionStatus, channel::{ChannelName, ChannelUpdate, Reducer}, controller::SessionError, frames::{FrameData, FrameId, FramePolicy, FrameSpecRef, FrameTree, ParentPolicy}, logs::{SessionLogs, SessionsLogs}, protocol::{Branch, FrameResponse, SessionCheckpointEvent}, run_log::RunLogContent, snapshot::{SessionSnapshots, Snapshot, SnapshotRef}, store::SessionStore, worker::{RunFrame, RunFrameArgs}
+    entity::UnitOfWork, events::EventBus, expert::{ExpertAskId, RequestAskExpert}, graph::{GraphId, GraphRef, Graphs, NodeId}, hitl::{Hitl, HitlId, model::Answers, service::SessionHitls}, id::IdGenerator, job::JobState, session::{
+        Session, SessionId, SessionStatus, channel::{ChannelName, ChannelUpdate, Reducer}, controller::SessionError, frames::{FrameKind, FrameId, FramePolicy, FrameSpecRef, FrameTree, ReducePolicy, ResumePolicy}, logs::SessionLogs, protocol::{Branch, FrameResponse, NewSessionArgs, SessionCheckpointEvent::{self, HitlAnswered}, SessionEvent}, run_log::RunLogContent, snapshot::{SessionSnapshots, Snapshot, SnapshotRef}, store::SessionStore, worker::{RunFrame, RunFrameArgs}
     }, tools::RequestToolCall, worker::WorkerClient
 };
 
@@ -18,12 +19,15 @@ mod factory;
 
 pub use factory::SessionCheckpointerFactory;
 
+pub type SessionCell = UnitOfWork<Session, SessionStore>;
+
 #[derive(TypedBuilder)]
 pub struct SessionCheckpointerArgs {
     session: Session,
     id: IdGenerator,
     queue: mpsc::UnboundedSender<SessionCheckpointEvent>,
     store: SessionStore,
+    events: EventBus,
     graphs: Graphs,
     hitls: SessionHitls,
     snapshots: SessionSnapshots,
@@ -32,13 +36,28 @@ pub struct SessionCheckpointerArgs {
     worker: WorkerClient
 }
 
+#[derive(Clone, Copy)]
+pub enum SessionCheckpointerStatus {
+    Initialising,
+    Running,
+    Closing,
+    Closed
+}
+
+#[derive(Clone)]
 pub struct SessionCheckpointer {
     store: SessionStore,
+    events: EventBus,
     id: IdGenerator,
-    queue: mpsc::UnboundedSender<SessionCheckpointEvent>,
     worker: WorkerClient,
     graphs: Graphs,
-    session: Mutex<Session>,
+    session_id: SessionId,
+    /// Fil d'évènements délégué en amont pour permettre au LRU cache
+    /// d'évincer le checkpointer en cas de nécessité.
+    listeners: mpsc::UnboundedSender<SessionCheckpointEvent>,
+    status_rx: watch::Receiver<SessionCheckpointerStatus>,
+    status_tx: watch::Sender<SessionCheckpointerStatus>,
+    queue_tx: mpsc::UnboundedSender<SessionCheckpointEvent>,
     frames: FrameTree,
     snapshots: SessionSnapshots,
     hitls: SessionHitls,
@@ -47,28 +66,134 @@ pub struct SessionCheckpointer {
 
 impl SessionCheckpointer {
     pub fn new(args: SessionCheckpointerArgs) -> Self {
-        Self {
+        let (status_tx, status_rx) = watch::channel(SessionCheckpointerStatus::Initialising);
+        let (queue_tx, queue_rx) = mpsc::unbounded_channel();
+
+        let session = UnitOfWork::new(
+            args.session,
+            args.store.clone()
+        );
+
+        let ckp = Self {
             store: args.store,
+            events: args.events,
             id: args.id,
+            session_id: session.id,
             worker: args.worker,
             graphs: args.graphs,
-            session: Mutex::new(args.session),
-            queue: args.queue,
+            listeners: args.queue,
             frames: args.frames,
             snapshots: args.snapshots,
             hitls: args.hitls,
-            session_logs: args.session_logs
+            session_logs: args.session_logs,
+            status_tx,
+            status_rx,
+            queue_tx
+        };
+
+        tokio::spawn(ckp.clone().run(session, queue_rx));
+
+        ckp
+    }
+
+    pub async fn initialise_as_new(&self, args: NewSessionArgs) -> Result<(), SessionError> {
+        
+        Ok(())
+    }
+
+    pub async fn send_ckp_event(&self, event: SessionCheckpointEvent) {
+        self.queue_tx.send(event);
+    }
+
+    async fn run(self, mut session: SessionCell, mut queue_rx: mpsc::UnboundedReceiver<SessionCheckpointEvent>) {
+        let mut status_rx = WatchStream::new(self.status_rx.clone());
+
+        self.status_tx.send_replace(SessionCheckpointerStatus::Running);
+        
+        loop {
+            select! {
+                Some(SessionCheckpointerStatus::Closing) = status_rx.next() => {
+                    self.close_and_process_remaining_events(&mut session, queue_rx).await;
+                    break;
+                },
+                Some(event) = queue_rx.recv() => {
+                    self.process_event(&mut session, event).await;
+                }
+            }
         }
+
+        session.flush().await;
+        self.status_tx.send_replace(SessionCheckpointerStatus::Closed);
+    }
+
+    async fn close_and_process_remaining_events(&self, session: &mut SessionCell, mut queue_rx: mpsc::UnboundedReceiver<SessionCheckpointEvent>) -> Result<(), SessionError> {
+        while let Some(event) = queue_rx.recv().await {
+            self.process_event(session, event).await?;
+        }
+
+        Ok(())
+    }
+
+    async fn process_event(&self, session: &mut SessionCell, event: SessionCheckpointEvent) -> Result<(), SessionError> {
+        use SessionCheckpointEvent::{
+            SessionCreated, 
+            FrameCreated, 
+            FrameRunJobStateUpdate, 
+            FrameReady, 
+            FrameRunTerminated, 
+            ChildFrameTerminated,
+            FrameTerminated
+        };
+
+        let result = match event {
+            SessionCreated { .. } => self.on_session_created().await,
+            FrameCreated { frame_id, .. } => self.on_frame_created(&frame_id).await,
+            HitlAnswered { response, .. } => self.on_hitl_response(response.id, response.answers).await,
+            FrameRunJobStateUpdate { frame_id, job_state, .. } => self.on_frame_run_update(&frame_id, job_state).await,
+            FrameReady { frame_id, .. } => self.on_frame_ready(&frame_id).await,
+            FrameRunTerminated { frame_id , .. } => self.on_frame_run_terminated(&frame_id).await,
+            ChildFrameTerminated { parent_id, child_id, .. } => self.on_child_frame_terminated(&parent_id, &child_id).await,
+            FrameTerminated { frame_id, .. } => self.on_frame_terminated(&frame_id).await,
+        };
+
+        if let Err(error) = &result {
+            self.fail(session, error).await;
+        }
+
+        result
+    }
+}
+
+impl SessionCheckpointer {
+    fn mark_session_as_failed(&self, session: &mut SessionCell, error: impl ToString) {
+        session.status = SessionStatus::Failed(error.to_string());
     }
 }
 
 impl SessionCheckpointer {
     fn emit(&self, event: SessionCheckpointEvent) {
-        self.queue.send(event);
+        self.listeners.send(event);
     }
 
     fn session_id(&self) -> SessionId {
-        self.session.lock().id
+        self.session_id
+    }
+}
+
+impl SessionCheckpointer {
+    pub async fn wait_for_initialisation(&self) {
+        self
+            .status_rx
+            .clone()
+            .wait_for(|status| !matches!(status, SessionCheckpointerStatus::Initialising)).await;
+    }
+
+    pub async fn close(&self) {
+        self.status_tx.send_replace(SessionCheckpointerStatus::Closing);
+        self.status_rx
+            .clone()
+            .wait_for(|status| matches!(status, SessionCheckpointerStatus::Closed))
+            .await;
     }
 }
 
@@ -108,7 +233,7 @@ impl SessionCheckpointer {
     /// Marque `frame_id` prêt à être exécuté et pousse
     /// [`Message::FrameReady`], pour que [`Self::on_frame_ready`] déclenche
     /// [`Self::run_frame`].
-    pub async fn mark_ready_frame(&self, frame_id: &FrameId) {
+    pub async fn mark_ready_to_run_frame(&self, frame_id: &FrameId) {
         use SessionCheckpointEvent::FrameReady;
         self.frames.set_status(frame_id, FrameStatus::Ready).await;
         self.emit(FrameReady { session_id: self.session_id(), frame_id: *frame_id });
@@ -147,18 +272,16 @@ impl SessionCheckpointer {
     /// `store.upsert_session` plutôt que de compter sur une éviction du
     /// cache de sessions, pour que le statut d'échec reste visible même si
     /// la session concernée ne redevient jamais active en mémoire.
-    async fn fail(&self, err: SessionError) {
+    async fn fail(&self, session: &mut SessionCell, err: &SessionError) {
         tracing::error!("session {} en échec: {err}", self.session_id());
 
-        let session = {
-            let mut guard = self.session.lock();
-            guard.status = SessionStatus::Failed(err.to_string());
-            guard.clone()
-        };
+        session.status = SessionStatus::Failed(err.to_string());
 
-        if let Err(err) = self.store.upsert_session(session).await {
+        if let Err(err) = session.flush().await {
             tracing::error!("échec de la persistance du statut Failed de la session {}: {err}", self.session_id());
         }
+
+        self.events.emit(SessionEvent::SessionStatusUpdated(self.session_id(), session.status.clone()));
     }
 }
 
@@ -184,7 +307,7 @@ impl SessionCheckpointer {
 
         let job_handle = self.worker.spawn::<RunFrame>(args, None).await?;
 
-        let queue = self.queue.clone();
+        let queue = self.listeners.clone();
         let session_id = self.session_id();
         let frame_id = *frame_id;
 
@@ -214,9 +337,13 @@ impl SessionCheckpointer {
         frame_id
     }
 
-    async fn write_to_inherited_channels(&self, frame_id: &FrameId, values: HashMap<ChannelName, Value>) -> Result<(), SessionError> {
+    /// Write to inherited channels, allows per-child frame special values
+    /// because the classic channel system cannot allow per-child frame fan-out
+    /// values
+    async fn write_to_inherited_channels(&self, frame_id: &FrameId, values: impl IntoIterator<Item=(ChannelName, Value)>) -> Result<(), SessionError> {
         let spec = self.frames.common_spec_of(&frame_id).await;
 
+        let values = HashMap::<ChannelName, Value>::from_iter(values);
         let written_channels = spec.inherited_channels
             .into_iter()
             .flat_map(|ch_name| values.get(&ch_name).cloned().map(|ch| (ch_name, ch)));
@@ -243,7 +370,8 @@ impl SessionCheckpointer {
 
         let inherited = spec.inherited_channels
             .into_iter()
-            .flat_map(|ch_name| parent_snapshot.lock().channels.get(&ch_name).cloned().map(|ch| (ch_name, ch)));
+            .flat_map(|ch_name| parent_snapshot.lock().channels.get(&ch_name)
+            .map(|ch| (ch_name, ch)));
 
         let frame = self.frames.get(&frame_id).await;
         let mut frame = frame.lock();
@@ -268,7 +396,8 @@ impl SessionCheckpointer {
 
         let inherited = spec.inherited_channels
             .into_iter()
-            .flat_map(|ch_name| sibling_snapshot.lock().channels.get(&ch_name).cloned().map(|ch| (ch_name, ch)));
+            .flat_map(|ch_name| sibling_snapshot.lock().channels.get(&ch_name).map(|ch| (ch_name, ch)));
+
 
         let frame = self.frames.get(&frame_id).await;
         let mut frame = frame.lock();
@@ -299,7 +428,7 @@ impl SessionCheckpointer {
         let frame = self.frames.get(&frame_id).await;
         frame.lock().inherited_channels.extend(spec.default_values);
 
-        if policy.parent_policy == ParentPolicy::Sequential {
+        if policy.resume_policy == ResumePolicy::Sequential {
             // on va reprendre les snapshots du précédent
             if self.frames.iter_children_of(&parent_id).await.next().is_some() {
                 self.inherit_from_prev_sibling(&frame_id).await?;
@@ -309,8 +438,6 @@ impl SessionCheckpointer {
         } else {
             self.inherit_from_parent(&frame_id).await?;
         }
-
-        
 
         self.emit(FrameCreated { session_id: self.session_id(), frame_id });
 
@@ -346,7 +473,7 @@ impl SessionCheckpointer {
                 if !parent_spec.imported_channels.contains(exported) {
                     continue;
                 }
-                if let Some(value) = child_snapshot.lock().channels.get(exported).cloned() {
+                if let Some(value) = child_snapshot.lock().channels.get(exported) {
                     per_channel
                         .entry(exported.clone())
                         .or_default()
@@ -389,11 +516,11 @@ impl SessionCheckpointer {
 
             let resolved = match (&pending.content, &child_spec_ref) {
                 (RunLogContent::HitlLog { .. }, FrameSpecRef::Hitl) =>
-                    channels.get(&ChannelName::from("hitl_answer")).cloned(),
-                (RunLogContent::AskExpertLog { .. }, FrameSpecRef::ExpertAggregator) =>
-                    channels.get(&ChannelName::from("expert_answer")).cloned(),
-                (RunLogContent::ToolCallLog { .. }, FrameSpecRef::ToolAggregator) =>
-                    channels.get(&ChannelName::from("tool_result")).cloned(),
+                    channels.get("hitl_answer"),
+                (RunLogContent::ConsultExpertsLog { .. }, FrameSpecRef::ExpertAggregator) =>
+                    channels.get("expert_consultation_answer"),
+                (RunLogContent::CallToolsLog { .. }, FrameSpecRef::ToolAggregator) =>
+                    channels.get("tool_result"),
                 (RunLogContent::GraphLog { .. }, FrameSpecRef::Graph(_)) => {
                     let sub_spec = self.frames.common_spec_of(child_id).await;
                     let mut map = serde_json::Map::new();
@@ -452,8 +579,8 @@ impl SessionCheckpointer {
                     .find(|c| c.name() == &name)
                     .map(|c| c.reducer().clone())
                     .unwrap_or(Reducer::LastWriteWins);
-                let current = channels.get(&name).cloned();
-                channels.insert(name, reducer.reduce(current, &contributions));
+                let current = channels.get(&name);
+                channels.write(name, reducer.reduce(current, &contributions));
             }
         }
 
@@ -478,15 +605,14 @@ impl SessionCheckpointer {
     /// [`FrameTree::spec_ref_of`]) — brique de base des trois autres
     /// `append_graph_*`, qui matérialisent chacun une séquence de nœuds ou
     /// un fork/join du graphe sous forme de frames.
-    async fn append_graph_node(&self, parent_id: &FrameId, node_id: NodeId) -> Result<(), SessionError> {
-        let graph_ref = self.frames.spec_ref_of(&parent_id).await.into_graph_ref();
+    async fn append_graph_node(&self, parent_id: &FrameId, graph_ref: &GraphRef, node_id: NodeId) -> Result<(), SessionError> {
 
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .frame_policy(FramePolicy::default())
             .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphNode {
-                graph_ref,
+            .data(FrameKind::GraphNode {
+                graph_ref: graph_ref.clone(),
                 node_id
             })
             .build();
@@ -504,14 +630,14 @@ impl SessionCheckpointer {
     /// `branches` devient un [`Self::append_graph_thread`] indépendant.
     async fn append_graph_span(&self, parent_id: &FrameId, graph_ref: &GraphRef, branches: Vec<Branch>, join: NodeId) -> Result<(), SessionError> {
         let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::FanIn;
+        policy.on_child_failed = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
+        policy.resume_policy = super::frames::ResumePolicy::FanIn;
 
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .frame_policy(policy)
             .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphSpan { graph_ref: graph_ref.clone(), join })
+            .data(FrameKind::GraphSpan { graph_ref: graph_ref.clone(), join })
             .build();
 
         let span_id = self.append_frame(&parent_id, args).await?;
@@ -540,20 +666,20 @@ impl SessionCheckpointer {
     /// comme premier [`Self::append_graph_node`].
     async fn append_graph_thread(&self, parent_id: &FrameId, graph_ref: &GraphRef, start: NodeId) -> Result<FrameId, SessionError> {
         let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::Sequential;
+        policy.on_child_failed = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
+        policy.resume_policy = super::frames::ResumePolicy::Sequential;
 
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .frame_policy(policy)
             .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::GraphThread { graph_ref: graph_ref.clone() })
+            .data(FrameKind::GraphThread { graph_ref: graph_ref.clone() })
             .build();
 
         let thread_id = self.append_frame(&parent_id, args).await?;
         self.mark_as_waiting_children(&thread_id).await;
 
-        self.append_graph_node(&thread_id, start).await?;
+        self.append_graph_node(&thread_id, &graph_ref, start).await?;
 
         Ok(thread_id)
     }
@@ -565,22 +691,21 @@ impl SessionCheckpointer {
         let graph_spec = self.graphs.get(&graph_ref).await?;
 
         let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::Sequential;
+        policy.on_child_failed = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
+        policy.resume_policy = super::frames::ResumePolicy::Sequential;
+        policy.on_start_policy = super::frames::OnStartPolicy::AppendGraphThread { graph_ref: graph_ref.clone(), start: graph_spec.entry };
 
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .frame_policy(policy)
             .spec_ref(FrameSpecRef::Graph(graph_ref.clone()))
-            .data(FrameData::Graph {
+            .data(FrameKind::Graph {
                 graph_ref: graph_ref.clone(),
             })
             .build();
 
         let frame_id = self.append_frame(&parent_id, args).await?;
         self.mark_as_waiting_children(&frame_id).await;
-
-        self.append_graph_thread(&frame_id, &graph_ref, graph_spec.entry).await?;
 
         Ok(())
     }
@@ -593,7 +718,7 @@ impl SessionCheckpointer {
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .spec_ref(FrameSpecRef::Hitl)
-            .data(FrameData::Hitl(hitl_id))
+            .data(FrameKind::Hitl(hitl_id))
             .build();
 
         let hitl_frame_id = self.append_frame(frame_id, args).await?;
@@ -603,51 +728,38 @@ impl SessionCheckpointer {
 }
 
 impl SessionCheckpointer {
-    async fn append_experts_askings(&self, callee_id: &FrameId, requests: Vec<RequestAskExpert>)  -> Result<FrameId, SessionError> {
-        let agg_id = self.append_expert_aggregator(callee_id).await?;
-        
+    async fn append_experts_consultations(&self, callee_id: &FrameId, requests: Vec<RequestAskExpert>)  -> Result<(), SessionError> {        
         stream::iter(requests)
             .map(Ok)
             .try_for_each(|request| {
                 async move {
-                    self.append_expert_asking(&agg_id, request).await?;
+                    self.append_expert_consultation(&callee_id, request).await?;
                     Ok::<_, SessionError>(())
                 }
             })
             .await?;
 
-        Ok(agg_id)
-    }
-
-    async fn append_expert_aggregator(&self, callee_id: &FrameId) -> Result<FrameId, SessionError> {
-        let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::FanIn;
-        
-        let args = NewFrameNodeArgs::builder()
-            .session_id(self.session_id())
-            .frame_policy(policy)
-            .spec_ref(FrameSpecRef::ExpertAggregator)
-            .data(FrameData::Void)
-            .build();
-
-        let agg_id = self.append_frame(callee_id, args).await?;
-        self.mark_as_waiting_children(&agg_id).await;
-        Ok(agg_id)
+        Ok(())
     }
 
     /// Génère lui-même l'[`ExpertAskId`] du frame enfant — voir la doc de
     /// [`RequestAskExpert`] : le déterminisme du rejeu interdit qu'il soit
     /// fourni par l'appelant (le corps de node/script à l'origine de la
     /// demande, potentiellement rejoué).
-    async fn append_expert_asking(&self, parent_id: &FrameId, request: RequestAskExpert) -> Result<FrameId, SessionError> {
+    async fn append_expert_consultation(&self, parent_id: &FrameId, request: RequestAskExpert) -> Result<FrameId, SessionError> {
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .spec_ref(FrameSpecRef::Expert)
-            .data(FrameData::AskExpert { id: ExpertAskId::new(), expert_id: request.expert_id, task: request.task })
+            .data(FrameKind::ExpertConsultation)
             .build();
 
+        
         let expert_id = self.append_frame(parent_id, args).await?;
+        
+        self.write_to_inherited_channels(&expert_id, [
+            ("expert_id".into(), request.expert_id.into()),
+            ("expert_consultation_task".into(), request.task.into())
+        ]);
 
         Ok(expert_id)
     }
@@ -678,7 +790,7 @@ impl SessionCheckpointer {
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .spec_ref(FrameSpecRef::ToolCall)
-            .data(FrameData::ToolCall { id: self.id.next(), name: request.name, parameters: request.parameters })
+            .data(FrameKind::ToolCall { id: self.id.next(), name: request.name, parameters: request.parameters })
             .build();
 
         let tool_id = self.append_frame(parent_id, args).await?;
@@ -688,14 +800,14 @@ impl SessionCheckpointer {
 
     async fn append_tool_aggregator(&self, callee_id: &FrameId) -> Result<FrameId, SessionError> {
         let mut policy = FramePolicy::default();
-        policy.child_failure_policy = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
-        policy.parent_policy = super::frames::ParentPolicy::FanIn;
+        policy.on_child_failed = super::frames::ChildFailurePolicy::FailIfAtLeastHasFailed(1);
+        policy.resume_policy = super::frames::ResumePolicy::FanIn;
         
         let args = NewFrameNodeArgs::builder()
             .session_id(self.session_id())
             .frame_policy(policy)
             .spec_ref(FrameSpecRef::ToolAggregator)
-            .data(FrameData::Void)
+            .data(FrameKind::Void)
             .build();
 
         let agg_id = self.append_frame(callee_id, args).await?;
@@ -705,6 +817,10 @@ impl SessionCheckpointer {
 }
 
 impl SessionCheckpointer {
+    pub async fn on_session_created(&self) -> Result<(), SessionError> {
+        Ok(())
+    }
+
     pub async fn on_hitl_response(&self, hitl_id: HitlId, answers: Answers) -> Result<(), SessionError> {
         let Some(frame_id) = self.frames.frame_id_bound_to_hitl_id(&hitl_id).await? else {
             return Ok(());
@@ -718,7 +834,7 @@ impl SessionCheckpointer {
             answers
         ).await;
 
-        self.mark_ready_frame(&frame_id).await;
+        self.mark_ready_to_run_frame(&frame_id).await;
 
         todo!()
     }
@@ -733,7 +849,25 @@ impl SessionCheckpointer {
         // Dans d'autres cas, notamment si on spawn un graph,
         // on créé un graph frame dont on passe automatiquement le statut en WaitingChildren
         if FrameStatus::Pending == self.frames.status_of(frame_id).await {
-            self.mark_ready_frame(frame_id).await;
+            match self.frames.policy_of(frame_id).await.on_start_policy.clone() {
+                super::frames::OnStartPolicy::RunFrame => {
+                    self.mark_ready_to_run_frame(frame_id).await;
+                },
+                super::frames::OnStartPolicy::AppendGraphThread { graph_ref, start } => {
+                    self.append_graph_thread(frame_id, &graph_ref, start).await;
+                    self.mark_as_waiting_children(frame_id).await;
+                }
+                super::frames::OnStartPolicy::AppendGraphSpan { graph_ref, branches, join } => {
+                    self.append_graph_span(frame_id, &graph_ref, branches, join).await;
+                    self.mark_as_waiting_children(frame_id).await;                 
+                }
+                super::frames::OnStartPolicy::AppendGraphNode { graph_ref, start } => {
+                    self.append_graph_node(frame_id, &graph_ref, start).await;
+                    self.frames.set_resume_policy(frame_id, ResumePolicy::Sequential).await;
+                    self.mark_as_waiting_children(frame_id).await;   
+                },
+            }
+            
         }
 
         Ok(())
@@ -776,8 +910,8 @@ impl SessionCheckpointer {
     pub async fn on_frame_run_terminated(&self, frame_id: &FrameId) -> Result<(), SessionError> {
         use super::protocol::FrameResult::{
             RequestHitl,
-            AskExperts,
-            RequestToolsCalls,
+            ConsultExperts,
+            CallTools,
             ExecuteGraph,
             Continue,
             GoTo,
@@ -810,14 +944,20 @@ impl SessionCheckpointer {
                     self.frames.logs_of(frame_id).await.len() as u32, 
                     hitl_id
                 );
+                
+                self.frames.set_resume_policy(frame_id, ResumePolicy::Hitl);
                 self.mark_as_waiting_children(frame_id).await
             },
-            AskExperts(experts_askings) => {
-                self.append_experts_askings(frame_id, experts_askings).await?;
+            ConsultExperts(experts_consult_requests) => {
+                self.append_experts_consultations(frame_id, experts_consult_requests).await?;
+                self.frames.set_resume_policy(frame_id, ResumePolicy::FanIn);
+                self.frames.set_reduce_policy(frame_id, ReducePolicy::Reduce).await;
                 self.mark_as_waiting_children(frame_id).await
             },
-            RequestToolsCalls(requests) => {
+            CallTools(requests) => {
                 self.append_tool_calls(frame_id, requests).await?;
+                self.frames.set_resume_policy(frame_id, ResumePolicy::FanIn);
+                self.frames.set_reduce_policy(frame_id, ReducePolicy::Reduce).await;
                 self.mark_as_waiting_children(frame_id).await
             },
             ExecuteGraph(graph_id) => {
@@ -826,21 +966,25 @@ impl SessionCheckpointer {
             },
             Continue => {
                 let Some(parent_id) = self.frames.parent_of(frame_id).await else { return Ok(()) };
-                let FrameData::GraphNode { graph_ref, node_id } = self.frames.data_of(frame_id).await else { return Ok(()) };
+                let FrameKind::GraphNode { graph_ref, node_id } = self.frames.data_of(frame_id).await else { return Ok(()) };
                 let graph_spec = self.graphs.get(&graph_ref).await?;
                 let Some(next) = graph_spec.edges.get(&node_id) else { return Ok(()) };
-                self.append_graph_node(&parent_id, next.clone()).await?;
+                self.append_graph_node(&parent_id, &&graph_ref, next.clone()).await?;
                 self.mark_completed_frame(frame_id).await;
             },
             GoTo(node_id) => {
                 let Some(parent_id) = self.frames.parent_of(frame_id).await else { return Ok(()) };
-                self.append_graph_node(&parent_id, node_id).await?;
+                let FrameKind::GraphNode { graph_ref, .. } = self.frames.data_of(frame_id).await else { return Ok(()) };
+                self.append_graph_node(&parent_id, &graph_ref, node_id).await?;
                 self.mark_completed_frame(frame_id).await;
             },
             Fork { branches, join } => {
                 let Some(parent_id) = self.frames.parent_of(frame_id).await else { return Ok(()) };
                 let graph_ref = self.frames.spec_ref_of(&parent_id).await.into_graph_ref();
                 self.append_graph_span(&parent_id, &graph_ref, branches, join).await?;
+                self.frames.set_resume_policy(&parent_id, ResumePolicy::Sequential);
+                self.frames.set_reduce_policy(&parent_id, ReducePolicy::DontReduce);
+                self.mark_as_waiting_children(&parent_id).await;
                 self.mark_completed_frame(frame_id).await;
             },
             Completed => {
@@ -876,7 +1020,7 @@ impl SessionCheckpointer {
     /// [`Self::drain_pending_accumulators`]/[`Self::commit_snapshot`]).
     pub async fn on_child_frame_terminated(&self, frame_id: &FrameId, child_id: &FrameId) -> Result<(), SessionError> {
         use super::frames::ChildFailurePolicy::{FailIfAtLeastHasFailed, DontFail};
-        use crate::session::frames::ParentPolicy::{Sequential, FanIn};
+        use crate::session::frames::ResumePolicy::{Sequential, FanIn, Hitl};
 
         let child_status = self.frames.status_of(child_id).await;
         let parent_policy = self.frames.policy_of(frame_id).await;
@@ -885,7 +1029,7 @@ impl SessionCheckpointer {
         // et de comment le parent doit réagir en fonction
         // de sa politique.
         if let FrameStatus::Failed(_) = child_status {
-            match parent_policy.child_failure_policy {
+            match parent_policy.on_child_failed {
                 FailIfAtLeastHasFailed(count) if count_failed_frame_child(&self.frames, frame_id).await >= count =>
                 {
                     self.mark_failed_frame(format!("au moins {count} enfants ont échoué"), frame_id).await;
@@ -895,12 +1039,13 @@ impl SessionCheckpointer {
                 DontFail | FailIfAtLeastHasFailed(_) => {},
             }
         }
+        
 
-        match parent_policy.parent_policy {
+        match parent_policy.resume_policy {
             Sequential => {
                 // par défaut un sequential sans enfants resume (c'est pas supposé arrivé)
                 let Some(last_child) = self.frames.last_child_of(frame_id).await else {
-                    self.mark_ready_frame(frame_id).await;
+                    self.mark_ready_to_run_frame(frame_id).await;
                     return Ok(());
                 };
 
@@ -945,10 +1090,10 @@ impl SessionCheckpointer {
                     join_sources
                 ).await?;
                 self.resolve_pending_log(frame_id, &relevant_children).await?;
-
                 self.resume_frame(frame_id).await;
             }
-            FanIn => {}
+            FanIn => {},
+            Hitl => {},
         }
 
         Ok(())
@@ -964,17 +1109,15 @@ impl SessionCheckpointer {
     /// n'ont qu'à notifier leur propre parent (voir
     /// [`Self::mark_completed_frame`]).
     async fn resume_frame(&self, frame_id: &FrameId) {
-        let replayable = matches!(
-            self.frames.data_of(frame_id).await,
-            FrameData::GraphNode { .. } 
-            | FrameData::AskExpert { .. } 
-            | FrameData::ToolCall { .. }
-        );
-        
-        if replayable {
-            self.mark_ready_frame(frame_id).await;
-        } else {
-            self.mark_completed_frame(frame_id).await;
+        use super::frames::OnResumePolicy::{RunFrame, MarkComplete};
+
+        match self.frames.on_resume_policy(frame_id).await {
+            RunFrame => {
+                self.mark_ready_to_run_frame(frame_id).await
+            },
+            MarkComplete => {
+                self.mark_completed_frame(frame_id).await
+            }
         }
     }
 }
@@ -1000,6 +1143,7 @@ async fn all_have_terminated(tree: &FrameTree, iter: impl Iterator<Item=FrameId>
         .all(|id| async move { tree.get(&id).await.lock().has_terminated() })
         .await
 }
+
 
 /// Comme [`all_have_terminated`], appliquée directement aux enfants de
 /// `parent_id` — utilisée par [`SessionHandler::on_child_frame_terminated`]

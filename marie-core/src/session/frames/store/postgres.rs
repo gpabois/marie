@@ -4,7 +4,7 @@ use sqlx::types::Json;
 
 use crate::hitl::HitlId;
 use crate::session::SessionId;
-use crate::session::frames::{FrameData, FrameId, FrameNode};
+use crate::session::frames::{FrameKind, FrameId, FrameNode};
 use crate::store::PgStore;
 
 use super::StoreSessionFrame;
@@ -86,7 +86,7 @@ impl StoreSessionFrame for PgStore {
         )
         .bind(id.to_string())
         .bind(frame_id.to_string())
-        .bind(Json(&FrameData::Hitl(*hitl_id)))
+        .bind(Json(&FrameKind::Hitl(*hitl_id)))
         .execute(self.pool())
         .await?;
 
@@ -114,7 +114,7 @@ impl StoreSessionFrame for PgStore {
              WHERE session_id = $1 AND node -> 'data' = $2::jsonb",
         )
         .bind(id.to_string())
-        .bind(Json(&FrameData::Hitl(hitl_id)))
+        .bind(Json(&FrameKind::Hitl(hitl_id)))
         .fetch_optional(self.pool())
         .await?;
 

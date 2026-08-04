@@ -13,7 +13,7 @@ use crate::{id::ID, session::SessionId};
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub enum Hitl {
-    Question(Question),
+    Questions(Vec<Question>),
     Text
 }
 
